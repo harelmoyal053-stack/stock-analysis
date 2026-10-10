@@ -13,6 +13,7 @@ globalThis.localStorage = { getItem:k=>mem[k]??null, setItem:(k,v)=>{mem[k]=Stri
 globalThis.window = globalThis; window.addEventListener = () => {}; window.removeEventListener = () => {}; window.dispatchEvent = () => {};
 globalThis.document = { getElementById: () => ({}), documentElement: { setAttribute(){}, removeAttribute(){} } };
 const realFetch = globalThis.fetch;
+const LOG = []; const log = (...a) => { const l = a.join(" "); LOG.push(l); console.log(l); };
 
 let src = readFileSync("src/app.jsx", "utf8").replace(/ReactDOM\.createRoot[\s\S]*$/, "");
 src += `
@@ -24,11 +25,11 @@ const T = globalThis.__T, key = T.DEFAULT_FH;
 const sym = "AAPL";
 const got = {};
 for (const k of ["profile","metric","rec","fin","earn","peers","insider"]) {
-  try { got[k] = await T.api[k](sym, key); } catch (e) { console.log("fetch failed", k, e.message); got[k] = null; }
+  try { got[k] = await T.api[k](sym, key); } catch (e) { log("fetch failed", k, e.message); got[k] = null; }
 }
 const peerM = [];
 for (const p of (got.peers||[]).slice(0,3)) { try { peerM.push({ s:p, m: await T.api.metric(p, key) }); } catch {} }
-console.log("fin years:", (got.fin||[]).map(r => `${r.y} rev=${r.rev} fcf=${r.fcf} cash=${r.cash} debt=${r.debt}`).join(" | "));
+log("fin years:", (got.fin||[]).map(r => `${r.y} rev=${r.rev} fcf=${r.fcf} cash=${r.cash} debt=${r.debt}`).join(" | "));
 const E = React.createElement;
 const cases = {
   S1: E(T.S1Business, { sym, profile: got.profile }),
@@ -50,8 +51,8 @@ for (const [name, el] of Object.entries(cases)) {
   try {
     const html = RDS.renderToString(el);
     const text = html.replace(/<[^>]+>/g, " ").replace(/\s+/g, " ").trim();
-    console.log(`OK ${name}: ${text.slice(0, 160)}`);
-  } catch (e) { failed++; console.log(`FAIL ${name}: ${e.stack.split("\n").slice(0,3).join(" | ")}`); }
+    log(`OK ${name}: ${text.slice(0, 900)}`);
+  } catch (e) { failed++; log(`FAIL ${name}: ${e.stack.split("\n").slice(0,3).join(" | ")}`); }
 }
-writeFileSync("test/last-run.txt", `${new Date().toISOString()} failed=${failed}\n`);
+writeFileSync("test/report.txt", `${new Date().toISOString()} failed=${failed}\n` + LOG.join("\n") + "\n");
 if (failed) process.exit(1);
