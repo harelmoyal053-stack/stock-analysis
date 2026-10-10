@@ -143,6 +143,30 @@ const api = {
 };
 
 const RANGES = { "1D":["5min",78], "1W":["1h",45], "1M":["1day",22], "1Y":["1day",252], "5Y":["1week",260] };
+const fmtDay = d => { const [y,m,dd] = d.split("-"); return `${+dd}/${+m}/${y.slice(2)}`; };
+const fmtTime = t => new Date(t*1000).toLocaleString("he-IL",{timeZone:"America/New_York",weekday:"short",hour:"2-digit",minute:"2-digit"});
+const repoHistory = (s) => cached(`h:${s}`, 6e5, async () => {
+  const r = await fetch(`data/${s}.json?v=${Math.floor(Date.now()/6e5)}`);
+  if (!r.ok) throw new Error("nohist");
+  return r.json();
+});
+async function history(s, range, tdKey){
+  if (tdKey) { try { return await series(s, range, tdKey); } catch(e) { if (e.message==="auth") throw e; } }
+  const h = await repoHistory(s);
+  if (range === "1D" || range === "1W") {
+    let pts = h.i || [];
+    if (range === "1D" && pts.length) {
+      const day = t => new Date(t*1000).toLocaleDateString("en-US",{timeZone:"America/New_York"});
+      const last = day(pts[pts.length-1][0]);
+      pts = pts.filter(p => day(p[0]) === last);
+    }
+    return pts.map(([t,p]) => ({ t:fmtTime(t), p }));
+  }
+  const n = range==="1M" ? 22 : range==="1Y" ? 252 : Infinity;
+  let pts = (h.d || []).slice(-n);
+  if (range === "5Y") pts = pts.filter((_,i,a) => i % 5 === 0 || i === a.length-1);
+  return pts.map(([d,p]) => ({ t:fmtDay(d), p }));
+}
 const series = (s, range, key) => cached(`ts:${s}:${range}`, range==="1D"?6e4:36e5, async () => {
   const [interval, outputsize] = RANGES[range];
   const r = await fetch(`https://api.twelvedata.com/time_series?${new URLSearchParams({symbol:s,interval,outputsize,apikey:key})}`);
@@ -306,7 +330,7 @@ function KeyForm({ keys, onSave, compact }){
       <p className="ex">מחירים חיים, חדשות, אנליסטים ודוחות. הרשמה חינמית ב-finnhub.io — המפתח מופיע מיד בדשבורד.</p>
       <input className="ki" value={fk} onChange={e=>setFk(e.target.value)} placeholder="paste Finnhub key"/>
       <div style={{fontWeight:800,fontSize:14,margin:"18px 0 6px"}}>מפתח Twelve Data <span style={{color:"#9ca3af",fontWeight:600}}>(לא חובה)</span></div>
-      <p className="ex">בשביל גרף המחיר ההיסטורי (שבוע, חודש, שנה). הרשמה חינמית ב-twelvedata.com.</p>
+      <p className="ex">גרף המחיר כבר עובד ל-40+ מניות מוכרות. המפתח הזה מוסיף גרף גם לכל שאר המניות. הרשמה חינמית ב-twelvedata.com.</p>
       <input className="ki" value={tk} onChange={e=>setTk(e.target.value)} placeholder="paste Twelve Data key"/>
       {err && <p style={{color:"#dc2626",fontSize:13,fontWeight:600,marginTop:12}}>{err}</p>}
       <button className="btn" style={{marginTop:20}} disabled={!fk.trim()||testing} onClick={save}>
@@ -462,9 +486,8 @@ function StockPage({ sym, keys, onBack, onSettings }){
   }, [sym, keys.fh]);
 
   useEffect(() => {
-    if (!keys.td) return;
     let alive = true; setChart(c => ({ data:c.data, err:null, loading:true }));
-    series(sym, range, keys.td).then(data => alive && setChart({ data })).catch(e => alive && setChart({ data:null, err:e }));
+    history(sym, range, keys.td).then(data => alive && setChart({ data })).catch(e => alive && setChart({ data:null, err:e }));
     return () => { alive = false; };
   }, [sym, range, keys.td]);
 
@@ -479,6 +502,7 @@ function StockPage({ sym, keys, onBack, onSettings }){
   const pe = metric?.peTTM ?? metric?.peBasicExclExtraTTM;
   const div = metric?.dividendYieldIndicatedAnnual;
   const col = up ? "#22c55e" : "#ef4444";
+  const chartCol = chart.data?.length > 1 ? (chart.data[chart.data.length-1].p >= chart.data[0].p ? "#22c55e" : "#ef4444") : col;
 
   return (
     <div style={{minHeight:"100vh",paddingBottom:90}}>
@@ -525,32 +549,38 @@ function StockPage({ sym, keys, onBack, onSettings }){
 
         {/* ── Chart ── */}
         <div className="card fu" style={{padding:"18px 16px"}}>
-          <div className="hd">📈 גרף מחיר</div>
-          {keys.td ? <>
-            <p className="ex">איך המחיר זז לאורך הזמן.</p>
+          <div className="hd">📈 איך המחיר זז?</div>
+          {!(chart.err && chart.err.message==="nohist") ? <>
+            {(() => {
+              const pts = chart.data; if (!pts?.length) return <p className="ex">המחיר של המניה לאורך הזמן.</p>;
+              const a = pts[0].p, b = pts[pts.length-1].p, ch = (b-a)/a*100;
+              const words = {"1D":"היום","1W":"בשבוע האחרון","1M":"בחודש האחרון","1Y":"בשנה האחרונה","5Y":"ב-5 השנים האחרונות"}[range];
+              return <p className="ex" style={{fontSize:14,fontWeight:700,color:ch>=0?"#16a34a":"#dc2626"}}>
+                {ch>=0?"▲ המניה עלתה":"▼ המניה ירדה"} {Math.abs(ch).toFixed(1)}% {words}
+                <span style={{color:"#9ca3af",fontWeight:500}}> ({usd(a)} ← {usd(b)})</span></p>;
+            })()}
             {chart.data?.length ? (
               <ResponsiveContainer width="100%" height={170}>
                 <AreaChart data={chart.data} margin={{top:4,right:0,bottom:0,left:0}}>
                   <defs><linearGradient id="cg" x1="0" y1="0" x2="0" y2="1">
-                    <stop offset="0%" stopColor={col} stopOpacity={.22}/><stop offset="100%" stopColor={col} stopOpacity={0}/>
+                    <stop offset="0%" stopColor={chartCol} stopOpacity={.22}/><stop offset="100%" stopColor={chartCol} stopOpacity={0}/>
                   </linearGradient></defs>
                   <YAxis hide domain={["dataMin","dataMax"]}/>
-                  <Area type="monotone" dataKey="p" stroke={col} strokeWidth={2.5} fill="url(#cg)" dot={false} isAnimationActive={false}/>
+                  <Area type="monotone" dataKey="p" stroke={chartCol} strokeWidth={2.5} fill="url(#cg)" dot={false} isAnimationActive={false}/>
                   <Tooltip content={({active,payload}) => active && payload?.length ? (
                     <div style={{background:"#111827",borderRadius:10,padding:"7px 12px",color:"#fff",fontSize:13,fontWeight:700}}>
                       {usd(payload[0].value)}<div style={{color:"#9ca3af",fontSize:11,fontWeight:500}}>{payload[0].payload.t}</div>
                     </div>) : null}/>
                 </AreaChart>
               </ResponsiveContainer>
-            ) : chart.err ? <p style={{fontSize:13,color:"#c2410c",padding:"30px 0",textAlign:"center"}}>{chart.err.message==="auth"?"מפתח Twelve Data לא תקין":"לא הצלחתי לטעון את הגרף"}</p>
+            ) : chart.err ? <p style={{fontSize:13,color:"#c2410c",padding:"30px 0",textAlign:"center"}}>{chart.err.message==="auth"?"מפתח Twelve Data לא תקין":"לא הצלחתי לטעון את הגרף — נסה שוב בעוד רגע"}</p>
               : <Sk h={170} r={14}/>}
             <div style={{display:"flex",justifyContent:"center",gap:4,marginTop:12}}>
               {Object.keys(RANGES).map(k => <button key={k} className={`rb ${range===k?"on":""}`} onClick={()=>setRange(k)}>{k}</button>)}
             </div>
           </> : <>
-            <p className="ex">טווח המחיר של היום — מהנמוך לגבוה.</p>
+            <p className="ex">עוד אין גרף היסטורי למניה הזו. בינתיים, טווח המחיר של היום:</p>
             {quote?.h ? <RangeBar lo={quote.l} hi={quote.h} cur={quote.c} loLabel="נמוך היום" hiLabel="גבוה היום"/> : <Sk h={40}/>}
-            <button className="btn2" style={{marginTop:14,width:"100%"}} onClick={onSettings}>➕ הוסף גרף היסטורי (מפתח Twelve Data חינמי)</button>
           </>}
           {pos52!=null && <div style={{marginTop:18}}>
             <p className="ex" style={{marginBottom:8}}>איפה המניה ביחס לשנה האחרונה.</p>
