@@ -12,7 +12,10 @@ SYMBOLS = [
     "AVGO", "ORCL", "CRM", "ADBE", "PYPL", "UBER", "SHOP", "PLTR", "COIN", "DIS",
     "NKE", "KO", "PEP", "MCD", "WMT", "COST", "JPM", "V", "MA", "BAC",
     "XOM", "JNJ", "PFE", "LLY", "UNH", "BA", "T", "TEVA", "CHKP", "WIX",
-    "MBLY", "CYBR", "SPY", "QQQ",
+    "MBLY", "CYBR", "SPY", "QQQ", "DIA", "NVO", "TSM", "ASML", "SBUX", "SPOT",
+    "ABNB", "SNOW", "SMCI", "ARM", "RIVN", "SOFI", "HOOD", "MRNA", "CVX", "HD",
+    "PG", "GS", "QCOM", "TXN", "MU", "IBM", "CSCO", "VZ", "F", "GM",
+    "LULU", "ROKU", "DKNG", "NIO", "BABA", "ESLT", "NICE", "MNDY", "GLBE", "ICL",
 ]
 UA = {"User-Agent": "Mozilla/5.0 (compatible; stock-analysis-site/1.0)"}
 OUT = os.path.join(os.path.dirname(__file__), "..", "data")
