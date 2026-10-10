@@ -1,0 +1,737 @@
+<!doctype html>
+<html lang="he" dir="rtl">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="theme-color" content="#f0f2f5">
+<title>ניתוח מניות</title>
+<style>
+  #boot{min-height:100vh;display:flex;align-items:center;justify-content:center;font-family:system-ui,sans-serif;color:#6b7280;background:#f0f2f5}
+</style>
+<script src="https://unpkg.com/react@18.3.1/umd/react.production.min.js"></script>
+<script src="https://unpkg.com/react-dom@18.3.1/umd/react-dom.production.min.js"></script>
+<script src="https://unpkg.com/prop-types@15.8.1/prop-types.min.js"></script>
+<script src="https://unpkg.com/recharts@2.12.7/umd/Recharts.min.js"></script>
+<script src="https://unpkg.com/@babel/standalone@7.24.7/babel.min.js"></script>
+</head>
+<body>
+<div id="root"><div id="boot">טוען...</div></div>
+<script type="text/babel" data-presets="react">
+const { useState, useEffect, useRef } = React;
+const { AreaChart, Area, BarChart, Bar, Cell, Tooltip, ResponsiveContainer, YAxis } = Recharts;
+
+/* ══════════════════════════════════════
+   STYLES
+══════════════════════════════════════ */
+const G = () => (
+  <style>{`
+    @import url('https://fonts.googleapis.com/css2?family=Heebo:wght@400;500;600;700;800;900&display=swap');
+    *,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
+    html,body,#root{min-height:100%;font-family:'Heebo',sans-serif;background:#f0f2f5;direction:rtl}
+    ::-webkit-scrollbar{width:0;height:0}
+    @keyframes fadeUp{from{opacity:0;transform:translateY(14px)}to{opacity:1;transform:translateY(0)}}
+    @keyframes spin{to{transform:rotate(360deg)}}
+    @keyframes pulse{0%,100%{opacity:1}50%{opacity:.35}}
+    @keyframes shimmer{0%{background-position:200% 0}100%{background-position:-200% 0}}
+    @keyframes flashG{0%{background:#dcfce7}100%{background:transparent}}
+    @keyframes flashR{0%{background:#fee2e2}100%{background:transparent}}
+    .fu{animation:fadeUp .4s cubic-bezier(.22,1,.36,1) both}
+    .card{background:#fff;border-radius:20px;box-shadow:0 2px 8px rgba(0,0,0,.06),0 0 0 1px rgba(0,0,0,.04)}
+    .tap{cursor:pointer;transition:transform .18s}
+    .tap:active{transform:scale(.975)}
+    .spin{animation:spin .8s linear infinite;display:inline-block}
+    .pdot{animation:pulse 1.6s infinite}
+    .sk{background:linear-gradient(90deg,#f0f2f5 25%,#e6e8eb 50%,#f0f2f5 75%);background-size:200% 100%;animation:shimmer 1.4s infinite;border-radius:10px}
+    .flashG{animation:flashG 1s ease}
+    .flashR{animation:flashR 1s ease}
+    input.si{width:100%;background:#fff;border:1.5px solid #e8eaed;border-radius:16px;padding:14px 46px 14px 16px;font-size:15px;font-family:'Heebo',sans-serif;color:#111827;outline:none;transition:.2s;text-align:right;direction:rtl}
+    input.si:focus{border-color:#22c55e;box-shadow:0 0 0 4px rgba(34,197,94,.1)}
+    input.ki{width:100%;background:#f8f9fb;border:1.5px solid #e8eaed;border-radius:14px;padding:13px 14px;font-size:14px;font-family:monospace;color:#111827;outline:none;direction:ltr;text-align:left}
+    input.ki:focus{border-color:#22c55e}
+    .btn{background:#22c55e;color:#fff;border:none;border-radius:14px;padding:14px;font-size:15px;font-weight:800;font-family:'Heebo',sans-serif;cursor:pointer;width:100%}
+    .btn:disabled{opacity:.4}
+    .btn2{background:#f3f4f6;color:#374151;border:none;border-radius:12px;padding:8px 14px;font-size:13px;font-weight:700;font-family:'Heebo',sans-serif;cursor:pointer}
+    .rb{padding:6px 13px;border-radius:10px;border:none;background:transparent;color:#9ca3af;font-size:13px;font-weight:700;cursor:pointer;font-family:'Heebo',sans-serif}
+    .rb.on{background:#111827;color:#fff}
+    .gb{background:#dcfce7;color:#16a34a;border-radius:10px;padding:4px 10px;font-size:13px;font-weight:700}
+    .rbd{background:#fee2e2;color:#dc2626;border-radius:10px;padding:4px 10px;font-size:13px;font-weight:700}
+    .hd{font-size:17px;font-weight:800;color:#111827;margin-bottom:6px}
+    .ex{font-size:12px;color:#9ca3af;margin-bottom:12px;line-height:1.5}
+    .stat{background:#f8f9fb;border-radius:14px;padding:12px}
+    .stat .l{font-size:11px;font-weight:600;color:#9ca3af}
+    .stat .v{font-size:15px;font-weight:800;color:#111827;margin-top:2px}
+    .sug{position:absolute;top:calc(100% + 8px);left:0;right:0;background:#fff;border-radius:18px;box-shadow:0 12px 40px rgba(0,0,0,.14);z-index:200;overflow:hidden}
+    .sr{display:flex;align-items:center;justify-content:space-between;padding:13px 16px;cursor:pointer}
+    .sr:hover{background:#f9fafb}
+    .sr+.sr{border-top:1px solid #f3f4f6}
+    .bnav{position:fixed;bottom:0;left:0;right:0;background:rgba(255,255,255,.95);backdrop-filter:blur(12px);border-top:1px solid rgba(0,0,0,.06);display:flex;justify-content:space-around;padding:10px 0 22px;z-index:100}
+    .ni{display:flex;flex-direction:column;align-items:center;gap:2px;opacity:.35;min-width:56px;cursor:pointer;font-size:20px}
+    .ni.on{opacity:1}
+    .ni span{font-size:10px;font-weight:700;color:#374151}
+    .sheet{position:fixed;inset:0;background:rgba(0,0,0,.35);z-index:300;display:flex;align-items:flex-end}
+    .sheet>div{background:#fff;width:100%;border-radius:24px 24px 0 0;padding:24px 20px 36px;max-width:640px;margin:0 auto}
+  `}</style>
+);
+
+/* ══════════════════════════════════════
+   STATIC HEBREW CONTENT
+══════════════════════════════════════ */
+const POPULAR = ["AAPL","NVDA","TSLA","MSFT","GOOGL","AMZN"];
+const HE = {
+  AAPL:{n:"אפל",d:"מייצרת אייפון, מק ושירותים דיגיטליים כמו App Store ו-iCloud."},
+  NVDA:{n:"אנבידיה",d:"מייצרת שבבים שמריצים את רוב מערכות הבינה המלאכותית בעולם."},
+  TSLA:{n:"טסלה",d:"מייצרת רכבים חשמליים ומערכות לאגירת אנרגיה."},
+  MSFT:{n:"מיקרוסופט",d:"מפתחת את Windows ו-Office ומפעילה את שירות הענן Azure."},
+  GOOGL:{n:"גוגל",d:"מפעילה את מנוע החיפוש ויוטיוב ומרוויחה בעיקר מפרסום."},
+  AMZN:{n:"אמזון",d:"חנות האונליין הגדולה בעולם ובעלת שירות הענן AWS."},
+  META:{n:"מטא",d:"הבעלים של פייסבוק, אינסטגרם ו-וואטסאפ, ומרוויחה מפרסום."},
+};
+const IND = {Technology:"טכנולוגיה",Semiconductors:"שבבים",Automobiles:"רכב","Media":"מדיה",Retail:"קמעונאות",Banking:"בנקאות",Pharmaceuticals:"תרופות",Software:"תוכנה",Telecommunication:"תקשורת","Financial Services":"פיננסים",Insurance:"ביטוח",Energy:"אנרגיה",Biotechnology:"ביוטכנולוגיה","Hotels, Restaurants & Leisure":"מסעדות ופנאי",Beverages:"משקאות",Aerospace:"תעופה וחלל"};
+const nameOf = (s,p) => HE[s]?.n || p?.name || s;
+const indOf  = (p) => p?.finnhubIndustry ? (IND[p.finnhubIndustry] || p.finnhubIndustry) : "";
+
+/* ══════════════════════════════════════
+   STORAGE + CACHE
+══════════════════════════════════════ */
+const store = {
+  get(k){ try{ return localStorage.getItem(k); }catch{ return null; } },
+  set(k,v){ try{ v==null?localStorage.removeItem(k):localStorage.setItem(k,v); }catch{} },
+};
+const mem = {};
+function cached(id, ttl, fn){
+  const c = mem[id];
+  if (c && "v" in c && Date.now()-c.t < ttl) return Promise.resolve(c.v);
+  if (c?.p) return c.p;
+  const p = fn()
+    .then(v => { mem[id] = { v, t: Date.now() }; return v; })
+    .catch(e => { if (c && "v" in c) mem[id] = { v:c.v, t:c.t }; else delete mem[id]; throw e; });
+  mem[id] = { ...(c||{}), p };
+  return p;
+}
+
+/* ══════════════════════════════════════
+   DATA PROVIDERS
+   Finnhub  — quotes, profile, metrics, analysts, news, financials (free key)
+   Twelve Data — historical price chart (optional free key)
+══════════════════════════════════════ */
+async function fh(path, params, key){
+  const r = await fetch(`https://finnhub.io/api/v1${path}?${new URLSearchParams({ ...params, token:key })}`);
+  if (r.status===401 || r.status===403) throw new Error("auth");
+  if (r.status===429) throw new Error("limit");
+  if (!r.ok) throw new Error("http");
+  return r.json();
+}
+const ymd = d => d.toISOString().slice(0,10);
+const api = {
+  quote:   (s,k) => cached(`q:${s}`,  8e3,   () => fh("/quote",{symbol:s},k)),
+  profile: (s,k) => cached(`p:${s}`,  864e5, async () => {
+    const saved = store.get(`p:${s}`); if (saved) return JSON.parse(saved);
+    const p = await fh("/stock/profile2",{symbol:s},k); if (p?.name) store.set(`p:${s}`, JSON.stringify(p)); return p;
+  }),
+  metric:  (s,k) => cached(`m:${s}`,  216e5, () => fh("/stock/metric",{symbol:s,metric:"all"},k).then(r=>r.metric||{})),
+  rec:     (s,k) => cached(`r:${s}`,  216e5, () => fh("/stock/recommendation",{symbol:s},k)),
+  news:    (s,k) => cached(`n:${s}`,  9e5,   () => fh("/company-news",{symbol:s,from:ymd(new Date(Date.now()-7*864e5)),to:ymd(new Date())},k).then(a=>(a||[]).slice(0,5))),
+  fin:     (s,k) => cached(`f:${s}`,  864e5, () => fh("/stock/financials-reported",{symbol:s,freq:"annual"},k).then(parseFin)),
+  search:  (q,k) => cached(`s:${q}`,  36e5,  () => fh("/search",{q},k).then(r=>(r.result||[]).filter(x=>x.type==="Common Stock" && !x.symbol.includes(".")).slice(0,6))),
+};
+
+const RANGES = { "1D":["5min",78], "1W":["1h",45], "1M":["1day",22], "1Y":["1day",252], "5Y":["1week",260] };
+const series = (s, range, key) => cached(`ts:${s}:${range}`, range==="1D"?6e4:36e5, async () => {
+  const [interval, outputsize] = RANGES[range];
+  const r = await fetch(`https://api.twelvedata.com/time_series?${new URLSearchParams({symbol:s,interval,outputsize,apikey:key})}`);
+  const j = await r.json();
+  if (j.status==="error") throw new Error(j.code===401?"auth":"td");
+  return (j.values||[]).map(v => ({ t:v.datetime, p:+v.close })).reverse();
+});
+
+/* Parse annual revenue + net income from SEC filings */
+const REV = ["us-gaap_Revenues","us-gaap_RevenueFromContractWithCustomerExcludingAssessedTax","us-gaap_SalesRevenueNet","us-gaap_RevenueFromContractWithCustomerIncludingAssessedTax"];
+const NI  = ["us-gaap_NetIncomeLoss","us-gaap_ProfitLoss","us-gaap_NetIncomeLossAvailableToCommonStockholdersBasic"];
+const pick = (ic,list) => { for (const c of list){ const f = ic.find(x=>x.concept===c); if (f && typeof f.value==="number") return f.value; } return null; };
+function parseFin(d){
+  const byYear = {};
+  for (const r of d?.data||[]) {
+    const ic = r.report?.ic || [];
+    const rev = pick(ic,REV), ni = pick(ic,NI);
+    if (!byYear[r.year] && (rev!=null || ni!=null)) byYear[r.year] = { y:String(r.year), rev, ni };
+  }
+  return Object.values(byYear).sort((a,b)=>a.y-b.y).slice(-5);
+}
+
+/* ══════════════════════════════════════
+   FORMATTERS
+══════════════════════════════════════ */
+const B = v => (v/1e9).toFixed(1);
+const cap = m => !m ? "—" : m>=1e6 ? `$${(m/1e6).toFixed(2)}T` : m>=1e3 ? `$${(m/1e3).toFixed(0)}B` : `$${m.toFixed(0)}M`;
+const usd = v => v==null||isNaN(v) ? "—" : `$${(+v).toFixed(2)}`;
+function ago(sec){
+  const m = Math.floor((Date.now()/1000 - sec)/60);
+  if (m < 60) return `לפני ${Math.max(1,m)} דק׳`;
+  const h = Math.floor(m/60); if (h < 24) return `לפני ${h} שע׳`;
+  const d = Math.floor(h/24); return d===1 ? "אתמול" : `לפני ${d} ימים`;
+}
+function marketStatus(){
+  const ny = new Date(new Date().toLocaleString("en-US",{timeZone:"America/New_York"}));
+  const mins = ny.getHours()*60 + ny.getMinutes(), day = ny.getDay();
+  if (day===0 || day===6) return { open:false, label:"הבורסה סגורה (סוף שבוע)" };
+  return mins>=570 && mins<960 ? { open:true, label:"הבורסה פתוחה" } : { open:false, label:"הבורסה סגורה" };
+}
+const errText = e => e?.message==="auth" ? "מפתח ה-API לא תקין — בדוק אותו בהגדרות"
+  : e?.message==="limit" ? "יותר מדי בקשות — מנסה שוב בעוד רגע" : "בעיית חיבור — מנסה שוב";
+
+/* ══════════════════════════════════════
+   SMART SUMMARY — rule-based, from real numbers only
+══════════════════════════════════════ */
+function buildSummary({ fin, rec, metric, quote }){
+  const pts = []; let growing = null, profitable = null;
+  if (fin?.length >= 2) {
+    const a = fin[fin.length-2].rev, b = fin[fin.length-1].rev;
+    if (a && b) {
+      const g = (b-a)/Math.abs(a)*100; growing = g > 0;
+      pts.push(g>3 ? {i:"📈",t:`ההכנסות גדלו ב-${g.toFixed(0)}% בשנה האחרונה.`}
+        : g<-3 ? {i:"📉",t:`ההכנסות ירדו ב-${Math.abs(g).toFixed(0)}% בשנה האחרונה.`}
+        : {i:"➖",t:"ההכנסות כמעט לא השתנו בשנה האחרונה."});
+    }
+  }
+  const ni = fin?.[fin.length-1]?.ni;
+  if (ni != null) {
+    profitable = ni > 0;
+    pts.push(ni>0 ? {i:"💰",t:`החברה רווחית — נשארו לה $${B(ni)} מיליארד אחרי כל ההוצאות.`}
+                  : {i:"⚠️",t:`החברה הפסידה $${B(Math.abs(ni))} מיליארד בשנה האחרונה.`});
+  }
+  const r = rec?.[0];
+  if (r) {
+    const tot = r.buy+r.hold+r.sell+r.strongBuy+r.strongSell;
+    const buy = (r.buy+r.strongBuy)/tot, sell = (r.sell+r.strongSell)/tot;
+    if (tot) pts.push(buy>=.6 ? {i:"👍",t:`${Math.round(buy*100)}% מהאנליסטים ממליצים לקנות.`}
+      : sell>=.3 ? {i:"👎",t:`${Math.round(sell*100)}% מהאנליסטים ממליצים למכור.`}
+      : {i:"🤔",t:"האנליסטים חלוקים — רובם ממליצים להחזיק."});
+  }
+  const hi = metric?.["52WeekHigh"], lo = metric?.["52WeekLow"], c = quote?.c;
+  if (hi && lo && c && hi>lo) {
+    const pos = (c-lo)/(hi-lo)*100;
+    if (pos > 85) pts.push({i:"🔝",t:"המניה קרובה לשיא של השנה האחרונה."});
+    else if (pos < 15) pts.push({i:"🔻",t:"המניה קרובה לשפל של השנה האחרונה."});
+  }
+  const pe = metric?.peTTM ?? metric?.peBasicExclExtraTTM;
+  if (pe > 40) pts.push({i:"💸",t:`המניה יקרה ביחס לרווחים שלה (מכפיל ${pe.toFixed(0)}) — השוק מצפה לצמיחה.`});
+  else if (pe > 0 && pe < 15) pts.push({i:"🏷️",t:`המניה זולה יחסית לרווחים שלה (מכפיל ${pe.toFixed(0)}).`});
+  return { pts, growing, profitable };
+}
+
+/* ══════════════════════════════════════
+   SMALL COMPONENTS
+══════════════════════════════════════ */
+const Sk = ({w="100%",h=16,mt=0,r=10}) => <div className="sk" style={{width:w,height:h,marginTop:mt,borderRadius:r}}/>;
+
+function Logo({ sym, url, size=46 }){
+  const [bad, setBad] = useState(false);
+  return (
+    <div style={{width:size,height:size,borderRadius:size*.3,background:"#fff",boxShadow:"0 1px 5px rgba(0,0,0,.12)",display:"flex",alignItems:"center",justifyContent:"center",overflow:"hidden",flexShrink:0}}>
+      {url && !bad
+        ? <img src={url} alt={sym} onError={()=>setBad(true)} style={{width:"78%",height:"78%",objectFit:"contain"}}/>
+        : <span style={{fontWeight:900,fontSize:size*.36,color:"#374151"}}>{sym[0]}</span>}
+    </div>
+  );
+}
+
+/* Price that flashes green/red when it changes */
+function LivePrice({ value, size=17 }){
+  const prev = useRef(value); const [cls, setCls] = useState("");
+  useEffect(() => {
+    if (prev.current!=null && value!=null && value!==prev.current) {
+      setCls(value>prev.current ? "flashG" : "flashR");
+      const t = setTimeout(()=>setCls(""), 1000); prev.current = value; return () => clearTimeout(t);
+    }
+    prev.current = value;
+  }, [value]);
+  return <span className={cls} style={{fontWeight:900,fontSize:size,color:"#111827",letterSpacing:"-.5px",borderRadius:6,padding:"0 2px"}}>{usd(value)}</span>;
+}
+
+const Pct = ({ v }) => v==null ? null : <span className={v>=0?"gb":"rbd"}>{v>=0?"▲":"▼"} {Math.abs(v).toFixed(2)}%</span>;
+
+function BottomNav({ onHome, onSettings }){
+  return (
+    <div className="bnav">
+      <div className="ni on" onClick={onHome}>🏠<span>בית</span></div>
+      <div className="ni" onClick={onHome}>🔍<span>חיפוש</span></div>
+      <div className="ni" onClick={onSettings}>⚙️<span>הגדרות</span></div>
+    </div>
+  );
+}
+
+/* ══════════════════════════════════════
+   KEY HANDLING
+   Finnhub keys are 20 chars. If two keys were pasted together, try each half.
+══════════════════════════════════════ */
+const DEFAULT_FH = ""; // key is entered once in the app and kept only in your browser
+function candidates(raw){
+  const k = (raw||"").replace(/\s+/g,"");
+  if (!k) return [];
+  return k.length === 40 ? [k.slice(0,20), k.slice(20), k] : [k];
+}
+async function findWorkingKey(list){
+  for (const k of list) {
+    try { const q = await fh("/quote",{symbol:"AAPL"},k); if (q && q.c) return k; }
+    catch(e){ if (e.message !== "auth") return k; } // network/limit issue — key may still be fine
+  }
+  return null;
+}
+
+/* ══════════════════════════════════════
+   SETUP / SETTINGS
+══════════════════════════════════════ */
+function KeyForm({ keys, onSave, compact }){
+  const [fk, setFk] = useState(keys.fh || "");
+  const [tk, setTk] = useState(keys.td || "");
+  const [testing, setTesting] = useState(false);
+  const [err, setErr] = useState("");
+  async function save(){
+    setTesting(true); setErr("");
+    const working = await findWorkingKey(candidates(fk));
+    if (working) onSave({ fh:working, td:tk.trim() });
+    else setErr("המפתח לא עבד — העתק שוב רק את שורת ה-API key מהדשבורד של Finnhub");
+    setTesting(false);
+  }
+  return (
+    <div>
+      <div style={{fontWeight:800,fontSize:14,marginBottom:6}}>מפתח Finnhub <span style={{color:"#dc2626"}}>*</span></div>
+      <p className="ex">מחירים חיים, חדשות, אנליסטים ודוחות. הרשמה חינמית ב-finnhub.io — המפתח מופיע מיד בדשבורד.</p>
+      <input className="ki" value={fk} onChange={e=>setFk(e.target.value)} placeholder="paste Finnhub key"/>
+      <div style={{fontWeight:800,fontSize:14,margin:"18px 0 6px"}}>מפתח Twelve Data <span style={{color:"#9ca3af",fontWeight:600}}>(לא חובה)</span></div>
+      <p className="ex">בשביל גרף המחיר ההיסטורי (שבוע, חודש, שנה). הרשמה חינמית ב-twelvedata.com.</p>
+      <input className="ki" value={tk} onChange={e=>setTk(e.target.value)} placeholder="paste Twelve Data key"/>
+      {err && <p style={{color:"#dc2626",fontSize:13,fontWeight:600,marginTop:12}}>{err}</p>}
+      <button className="btn" style={{marginTop:20}} disabled={!fk.trim()||testing} onClick={save}>
+        {testing ? <span className="spin">↻</span> : compact ? "שמור" : "התחבר והתחל"}
+      </button>
+      <p style={{fontSize:11,color:"#9ca3af",marginTop:12,lineHeight:1.5}}>המפתחות נשמרים רק בדפדפן שלך.</p>
+    </div>
+  );
+}
+
+function SetupScreen({ keys, onSave }){
+  return (
+    <div style={{minHeight:"100vh",padding:"48px 20px",maxWidth:520,margin:"0 auto"}}>
+      <div className="fu" style={{fontSize:40,marginBottom:12}}>📡</div>
+      <h1 className="fu" style={{fontSize:26,fontWeight:900,color:"#111827",marginBottom:8}}>חיבור לנתונים חיים</h1>
+      <p className="fu" style={{fontSize:14,color:"#6b7280",marginBottom:28,lineHeight:1.6}}>האתר מושך נתונים ישירות מספקי נתוני בורסה — לא ניחושים ולא נתונים מומצאים.</p>
+      <div className="card fu" style={{padding:20}}><KeyForm keys={keys} onSave={onSave}/></div>
+    </div>
+  );
+}
+
+/* ══════════════════════════════════════
+   HOME
+══════════════════════════════════════ */
+function HomePage({ keyFH, onSelect, onSettings }){
+  const [quotes, setQuotes] = useState({});
+  const [profiles, setProfiles] = useState({});
+  const [err, setErr] = useState(null);
+  const [updated, setUpdated] = useState(null);
+  const [q, setQ] = useState("");
+  const [results, setResults] = useState([]);
+  const [searching, setSearching] = useState(false);
+  const market = marketStatus();
+
+  useEffect(() => {
+    let alive = true;
+    POPULAR.forEach(s => api.profile(s,keyFH).then(p => alive && setProfiles(x=>({...x,[s]:p}))).catch(()=>{}));
+    async function tick(){
+      const res = await Promise.allSettled(POPULAR.map(s => api.quote(s,keyFH)));
+      if (!alive) return;
+      const next = {}; let firstErr = null;
+      res.forEach((r,i) => r.status==="fulfilled" ? next[POPULAR[i]] = r.value : firstErr = firstErr || r.reason);
+      setQuotes(x=>({...x,...next})); setErr(Object.keys(next).length ? null : firstErr);
+      setUpdated(new Date().toLocaleTimeString("he-IL",{hour:"2-digit",minute:"2-digit",second:"2-digit"}));
+    }
+    tick(); const id = setInterval(tick, 15000);
+    return () => { alive = false; clearInterval(id); };
+  }, [keyFH]);
+
+  useEffect(() => {
+    const term = q.trim();
+    if (!term) { setResults([]); return; }
+    const local = Object.entries(HE).filter(([s,v]) => s.includes(term.toUpperCase()) || v.n.includes(term)).map(([s]) => ({symbol:s, description:HE[s].n}));
+    setResults(local);
+    if (/[a-zA-Z]/.test(term)) {
+      setSearching(true);
+      const t = setTimeout(() => api.search(term,keyFH).then(r => {
+        const seen = new Set(local.map(x=>x.symbol));
+        setResults([...local, ...r.filter(x=>!seen.has(x.symbol))].slice(0,7));
+      }).catch(()=>{}).finally(()=>setSearching(false)), 350);
+      return () => clearTimeout(t);
+    }
+  }, [q, keyFH]);
+
+  return (
+    <div style={{minHeight:"100vh",paddingBottom:90}}>
+      <div style={{background:"#fff",padding:"14px 20px",borderBottom:"1px solid rgba(0,0,0,.05)",display:"flex",justifyContent:"space-between",alignItems:"center",position:"sticky",top:0,zIndex:50}}>
+        <div>
+          <div style={{fontSize:16,fontWeight:800,color:"#111827"}}>ניתוח מניות</div>
+          <div style={{fontSize:11,fontWeight:700,color:market.open?"#16a34a":"#dc2626"}}><span className="pdot">●</span> {market.label}</div>
+        </div>
+        <div style={{fontSize:11,color:"#9ca3af",textAlign:"left"}}>
+          <div style={{color:"#16a34a",fontWeight:700}}><span className="pdot">●</span> נתונים חיים</div>
+          {updated && <div>עודכן {updated}</div>}
+        </div>
+      </div>
+
+      <div style={{padding:"22px 16px",maxWidth:640,margin:"0 auto"}}>
+        <h1 className="fu" style={{fontSize:26,fontWeight:900,color:"#111827",marginBottom:4}}>מה השוק עושה היום?</h1>
+        <p className="fu" style={{fontSize:13,color:"#9ca3af",marginBottom:18}}>חפש כל מניה אמריקאית לפי שם או סימול</p>
+
+        <div className="fu" style={{position:"relative",marginBottom:24}}>
+          <input className="si" placeholder="למשל: AAPL, Netflix, טסלה" value={q} onChange={e=>setQ(e.target.value)}/>
+          <span style={{position:"absolute",left:15,top:"50%",transform:"translateY(-50%)",color:"#c0c8d4"}}>{searching ? <span className="spin">↻</span> : "🔍"}</span>
+          {results.length>0 && (
+            <div className="sug">
+              {results.map(r => (
+                <div key={r.symbol} className="sr" onClick={()=>{ onSelect(r.symbol); setQ(""); }}>
+                  <div>
+                    <div style={{fontWeight:800,fontSize:14,color:"#111827"}}>{r.symbol}</div>
+                    <div style={{fontSize:12,color:"#9ca3af"}}>{r.description}</div>
+                  </div>
+                  <span style={{color:"#22c55e",fontWeight:700,fontSize:13}}>פתח ←</span>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+
+        {err && (
+          <div className="card" style={{padding:14,marginBottom:14,background:"#fff7ed",display:"flex",justifyContent:"space-between",alignItems:"center",gap:10}}>
+            <span style={{fontSize:13,color:"#c2410c",fontWeight:600}}>{errText(err)}</span>
+            {err.message==="auth" && <button className="btn2" onClick={onSettings}>הגדרות</button>}
+          </div>
+        )}
+
+        <div style={{fontSize:16,fontWeight:800,color:"#111827",marginBottom:12}}>מניות פופולריות</div>
+        <div style={{display:"flex",flexDirection:"column",gap:10}}>
+          {POPULAR.map((s,i) => {
+            const qt = quotes[s], p = profiles[s];
+            return (
+              <div key={s} className="card tap" onClick={()=>onSelect(s)}
+                style={{padding:"14px 16px",display:"flex",alignItems:"center",justifyContent:"space-between",animation:`fadeUp .4s ${i*.05}s both`}}>
+                <div style={{display:"flex",alignItems:"center",gap:12}}>
+                  <Logo sym={s} url={p?.logo}/>
+                  <div>
+                    <div style={{fontWeight:800,fontSize:15,color:"#111827"}}>{nameOf(s,p)}</div>
+                    <div style={{fontSize:12,color:"#9ca3af"}}>{s}{indOf(p) && ` · ${indOf(p)}`}</div>
+                  </div>
+                </div>
+                <div style={{textAlign:"left"}}>
+                  {qt?.c ? <><LivePrice value={qt.c}/><div style={{marginTop:3}}><Pct v={qt.dp}/></div></>
+                         : <><Sk w={70} h={18}/><Sk w={50} h={14} mt={6}/></>}
+                </div>
+              </div>
+            );
+          })}
+        </div>
+        <p style={{textAlign:"center",fontSize:11,color:"#c0c8d4",marginTop:22}}>מקור: Finnhub · מתעדכן כל 15 שניות · לא המלצת השקעה</p>
+      </div>
+      <BottomNav onHome={()=>{}} onSettings={onSettings}/>
+    </div>
+  );
+}
+
+/* ══════════════════════════════════════
+   STOCK PAGE
+══════════════════════════════════════ */
+function StockPage({ sym, keys, onBack, onSettings }){
+  const [d, setD] = useState({});
+  const [err, setErr] = useState(null);
+  const [range, setRange] = useState("1M");
+  const [chart, setChart] = useState({ data:null, err:null });
+
+  useEffect(() => {
+    let alive = true;
+    const set = (k) => (v) => alive && setD(x => ({ ...x, [k]: v }));
+    const fail = (k) => (e) => { if (!alive) return; setD(x => ({ ...x, [k]: null })); if (e.message==="auth") setErr(e); };
+    ["profile","metric","rec","news","fin"].forEach(k => api[k](sym,keys.fh).then(set(k)).catch(fail(k)));
+    const tick = () => api.quote(sym,keys.fh).then(v => { set("quote")(v); alive && setErr(null); }).catch(e => alive && setErr(e));
+    tick(); const id = setInterval(tick, 10000);
+    return () => { alive = false; clearInterval(id); };
+  }, [sym, keys.fh]);
+
+  useEffect(() => {
+    if (!keys.td) return;
+    let alive = true; setChart(c => ({ data:c.data, err:null, loading:true }));
+    series(sym, range, keys.td).then(data => alive && setChart({ data })).catch(e => alive && setChart({ data:null, err:e }));
+    return () => { alive = false; };
+  }, [sym, range, keys.td]);
+
+  const { quote, profile, metric, rec, news, fin } = d;
+  const up = (quote?.dp ?? 0) >= 0;
+  const summary = buildSummary({ fin, rec, metric, quote });
+  const r = rec?.[0];
+  const buy = r ? r.buy + r.strongBuy : 0, sell = r ? r.sell + r.strongSell : 0, hold = r?.hold || 0;
+  const tot = buy + hold + sell;
+  const hi = metric?.["52WeekHigh"], lo = metric?.["52WeekLow"];
+  const pos52 = hi && lo && quote?.c ? Math.min(100, Math.max(0, (quote.c-lo)/(hi-lo)*100)) : null;
+  const pe = metric?.peTTM ?? metric?.peBasicExclExtraTTM;
+  const div = metric?.dividendYieldIndicatedAnnual;
+  const col = up ? "#22c55e" : "#ef4444";
+
+  return (
+    <div style={{minHeight:"100vh",paddingBottom:90}}>
+      <div style={{background:"rgba(255,255,255,.95)",backdropFilter:"blur(14px)",padding:"12px 16px",borderBottom:"1px solid rgba(0,0,0,.05)",display:"flex",alignItems:"center",justifyContent:"space-between",position:"sticky",top:0,zIndex:50}}>
+        <button onClick={onBack} className="btn2" style={{width:38,height:38,padding:0,fontSize:16}}>→</button>
+        <div style={{fontWeight:800,fontSize:16,color:"#111827"}}>{nameOf(sym,profile)}</div>
+        <div style={{fontSize:11,color:"#16a34a",fontWeight:700,width:38,textAlign:"left"}}><span className="pdot">●</span> חי</div>
+      </div>
+
+      <div style={{padding:"16px",display:"flex",flexDirection:"column",gap:16,maxWidth:640,margin:"0 auto"}}>
+        {err && (
+          <div className="card" style={{padding:14,background:"#fff7ed",display:"flex",justifyContent:"space-between",alignItems:"center",gap:10}}>
+            <span style={{fontSize:13,color:"#c2410c",fontWeight:600}}>{errText(err)}</span>
+            {err.message==="auth" && <button className="btn2" onClick={onSettings}>הגדרות</button>}
+          </div>
+        )}
+
+        {/* ── Overview ── */}
+        <div className="card fu" style={{padding:20}}>
+          <div style={{display:"flex",justifyContent:"space-between",gap:12,alignItems:"flex-start"}}>
+            <div style={{display:"flex",gap:12,alignItems:"center"}}>
+              <Logo sym={sym} url={profile?.logo} size={50}/>
+              <div>
+                <div style={{fontWeight:900,fontSize:20,color:"#111827"}}>{nameOf(sym,profile)}</div>
+                <div style={{fontSize:12,color:"#9ca3af"}}>{sym}{indOf(profile) && ` · ${indOf(profile)}`}</div>
+              </div>
+            </div>
+            <div style={{textAlign:"left"}}>
+              {quote?.c ? <><LivePrice value={quote.c} size={28}/><div style={{marginTop:4}}><Pct v={quote.dp}/></div>
+                <div style={{fontSize:11,color:"#9ca3af",marginTop:4}}>{up?"+":"−"}${Math.abs(quote.d||0).toFixed(2)} היום</div></>
+                : <><Sk w={100} h={30}/><Sk w={70} h={20} mt={6}/></>}
+            </div>
+          </div>
+          <p style={{fontSize:14,color:"#6b7280",lineHeight:1.6,marginTop:14}}>
+            {HE[sym]?.d || (profile ? `${profile.name} פועלת בתחום ${indOf(profile) || "—"}.` : <Sk h={14}/>)}
+          </p>
+          <div style={{display:"grid",gridTemplateColumns:"repeat(3,1fr)",gap:8,marginTop:14}}>
+            <div className="stat"><div className="l">שווי שוק</div><div className="v">{profile===undefined ? <Sk h={14} mt={4}/> : cap(profile?.marketCapitalization)}</div></div>
+            <div className="stat"><div className="l">מכפיל רווח</div><div className="v">{metric===undefined ? <Sk h={14} mt={4}/> : pe ? pe.toFixed(1) : "—"}</div></div>
+            <div className="stat"><div className="l">דיבידנד</div><div className="v">{metric===undefined ? <Sk h={14} mt={4}/> : div ? `${div.toFixed(2)}%` : "אין"}</div></div>
+          </div>
+          <p className="ex" style={{marginTop:10,marginBottom:0}}>שווי שוק = כמה שווה כל החברה. מכפיל רווח = כמה שנות רווח משלמים על המניה.</p>
+        </div>
+
+        {/* ── Chart ── */}
+        <div className="card fu" style={{padding:"18px 16px"}}>
+          <div className="hd">📈 גרף מחיר</div>
+          {keys.td ? <>
+            <p className="ex">איך המחיר זז לאורך הזמן.</p>
+            {chart.data?.length ? (
+              <ResponsiveContainer width="100%" height={170}>
+                <AreaChart data={chart.data} margin={{top:4,right:0,bottom:0,left:0}}>
+                  <defs><linearGradient id="cg" x1="0" y1="0" x2="0" y2="1">
+                    <stop offset="0%" stopColor={col} stopOpacity={.22}/><stop offset="100%" stopColor={col} stopOpacity={0}/>
+                  </linearGradient></defs>
+                  <YAxis hide domain={["dataMin","dataMax"]}/>
+                  <Area type="monotone" dataKey="p" stroke={col} strokeWidth={2.5} fill="url(#cg)" dot={false} isAnimationActive={false}/>
+                  <Tooltip content={({active,payload}) => active && payload?.length ? (
+                    <div style={{background:"#111827",borderRadius:10,padding:"7px 12px",color:"#fff",fontSize:13,fontWeight:700}}>
+                      {usd(payload[0].value)}<div style={{color:"#9ca3af",fontSize:11,fontWeight:500}}>{payload[0].payload.t}</div>
+                    </div>) : null}/>
+                </AreaChart>
+              </ResponsiveContainer>
+            ) : chart.err ? <p style={{fontSize:13,color:"#c2410c",padding:"30px 0",textAlign:"center"}}>{chart.err.message==="auth"?"מפתח Twelve Data לא תקין":"לא הצלחתי לטעון את הגרף"}</p>
+              : <Sk h={170} r={14}/>}
+            <div style={{display:"flex",justifyContent:"center",gap:4,marginTop:12}}>
+              {Object.keys(RANGES).map(k => <button key={k} className={`rb ${range===k?"on":""}`} onClick={()=>setRange(k)}>{k}</button>)}
+            </div>
+          </> : <>
+            <p className="ex">טווח המחיר של היום — מהנמוך לגבוה.</p>
+            {quote?.h ? <RangeBar lo={quote.l} hi={quote.h} cur={quote.c} loLabel="נמוך היום" hiLabel="גבוה היום"/> : <Sk h={40}/>}
+            <button className="btn2" style={{marginTop:14,width:"100%"}} onClick={onSettings}>➕ הוסף גרף היסטורי (מפתח Twelve Data חינמי)</button>
+          </>}
+          {pos52!=null && <div style={{marginTop:18}}>
+            <p className="ex" style={{marginBottom:8}}>איפה המניה ביחס לשנה האחרונה.</p>
+            <RangeBar lo={lo} hi={hi} cur={quote.c} loLabel="שפל שנתי" hiLabel="שיא שנתי"/>
+          </div>}
+        </div>
+
+        {/* ── Smart summary ── */}
+        <div className="fu">
+          <div className="hd">🤖 סיכום חכם</div>
+          <p className="ex">מחושב אוטומטית מהנתונים האמיתיים של החברה.</p>
+          <div style={{background:"#111827",borderRadius:20,padding:"20px 18px"}}>
+            {fin===undefined || rec===undefined
+              ? [1,2,3].map(i => <div key={i} className="sk" style={{height:15,marginTop:i>1?12:0,opacity:.15}}/>)
+              : <>
+                {(summary.growing!=null || summary.profitable!=null) && (
+                  <div style={{display:"flex",gap:8,marginBottom:16,flexWrap:"wrap"}}>
+                    {summary.growing!=null && <Tag good={summary.growing} text={summary.growing?"📈 צומחת":"📉 בירידה"}/>}
+                    {summary.profitable!=null && <Tag good={summary.profitable} text={summary.profitable?"💰 רווחית":"⚠️ מפסידה"}/>}
+                  </div>
+                )}
+                {summary.pts.length ? summary.pts.map((p,i) => (
+                  <div key={i} style={{display:"flex",gap:12,marginTop:i?12:0}}>
+                    <span style={{fontSize:16}}>{p.i}</span><span style={{fontSize:14,color:"#d1d5db",lineHeight:1.55}}>{p.t}</span>
+                  </div>
+                )) : <p style={{color:"#9ca3af",fontSize:13}}>אין מספיק נתונים לסיכום עבור המניה הזו.</p>}
+              </>}
+          </div>
+        </div>
+
+        {/* ── Financials ── */}
+        {fin !== null && (
+          <div className="fu">
+            <div className="hd">💰 הכנסות ורווח</div>
+            <p className="ex">מתוך הדוחות השנתיים הרשמיים של החברה (במיליארדי דולר).</p>
+            <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:12}}>
+              <FinCard rows={fin} k="rev" label="הכנסות" note="כל הכסף שנכנס לחברה" dark/>
+              <FinCard rows={fin} k="ni"  label="רווח נקי" note="מה שנשאר אחרי ההוצאות"/>
+            </div>
+          </div>
+        )}
+
+        {/* ── Analysts ── */}
+        {rec !== null && (
+          <div className="fu">
+            <div className="hd">📊 מה חושבים האנליסטים</div>
+            <p className="ex">המלצות של אנליסטים מבנקים וחברות השקעה{r?.period ? ` (נכון ל-${r.period})` : ""}.</p>
+            <div className="card" style={{padding:18}}>
+              {rec===undefined ? <Sk h={60}/> : tot ? <>
+                <div style={{display:"flex",height:12,borderRadius:99,overflow:"hidden",gap:2}}>
+                  <div style={{flex:buy,background:"#22c55e"}}/><div style={{flex:hold,background:"#f59e0b"}}/><div style={{flex:sell,background:"#ef4444"}}/>
+                </div>
+                <div style={{display:"flex",justifyContent:"space-between",marginTop:12}}>
+                  {[["קנייה",buy,"#16a34a"],["החזקה",hold,"#ca8a04"],["מכירה",sell,"#dc2626"]].map(([l,v,c]) => (
+                    <div key={l} style={{textAlign:"center"}}>
+                      <div style={{fontSize:20,fontWeight:900,color:c}}>{v}</div>
+                      <div style={{fontSize:12,color:"#6b7280",fontWeight:600}}>{l}</div>
+                    </div>
+                  ))}
+                </div>
+              </> : <p style={{fontSize:13,color:"#9ca3af"}}>אין המלצות זמינות למניה הזו.</p>}
+            </div>
+          </div>
+        )}
+
+        {/* ── News ── */}
+        {news !== null && (
+          <div className="fu">
+            <div className="hd">📰 חדשות אחרונות</div>
+            <p className="ex">כותרות מהשבוע האחרון (באנגלית, מהמקור). לחץ לקריאה.</p>
+            <div className="card" style={{padding:"4px 16px"}}>
+              {news===undefined ? [1,2,3].map(i => <div key={i} style={{padding:"14px 0"}}><Sk h={14}/><Sk h={11} w="40%" mt={6}/></div>)
+                : news.length ? news.map((n,i) => (
+                  <a key={n.id||i} href={n.url} target="_blank" rel="noopener noreferrer"
+                    style={{display:"block",padding:"14px 0",borderTop:i?"1px solid #f3f4f6":"none",textDecoration:"none"}}>
+                    <div dir="ltr" style={{fontWeight:700,fontSize:14,color:"#111827",lineHeight:1.45,textAlign:"left"}}>{n.headline}</div>
+                    <div style={{fontSize:11,color:"#9ca3af",marginTop:4}}>{n.source} · {ago(n.datetime)}</div>
+                  </a>
+                )) : <p style={{fontSize:13,color:"#9ca3af",padding:"14px 0"}}>אין חדשות מהשבוע האחרון.</p>}
+            </div>
+          </div>
+        )}
+
+        <p style={{textAlign:"center",fontSize:11,color:"#c0c8d4"}}>מקור: Finnhub{keys.td ? " · Twelve Data" : ""} · לא המלצת השקעה</p>
+      </div>
+      <BottomNav onHome={onBack} onSettings={onSettings}/>
+    </div>
+  );
+}
+
+const Tag = ({ good, text }) => (
+  <span style={{background:good?"rgba(34,197,94,.18)":"rgba(239,68,68,.15)",color:good?"#34d399":"#f87171",borderRadius:10,padding:"6px 14px",fontSize:13,fontWeight:700}}>{text}</span>
+);
+
+function RangeBar({ lo, hi, cur, loLabel, hiLabel }){
+  const pct = hi>lo ? Math.min(100, Math.max(0, (cur-lo)/(hi-lo)*100)) : 50;
+  return (
+    <div>
+      <div style={{position:"relative",height:8,background:"#e5e7eb",borderRadius:99}}>
+        <div style={{position:"absolute",top:0,right:0,width:`${pct}%`,height:"100%",background:"linear-gradient(to left,#22c55e,#86efac)",borderRadius:99}}/>
+        <div style={{position:"absolute",top:"50%",right:`${pct}%`,transform:"translate(50%,-50%)",width:16,height:16,borderRadius:"50%",background:"#fff",border:"3px solid #22c55e",boxShadow:"0 1px 4px rgba(0,0,0,.2)"}}/>
+      </div>
+      <div style={{display:"flex",justifyContent:"space-between",marginTop:8,fontSize:12}}>
+        <span><span style={{color:"#9ca3af"}}>{loLabel} </span><b>{usd(lo)}</b></span>
+        <span><span style={{color:"#9ca3af"}}>{hiLabel} </span><b>{usd(hi)}</b></span>
+      </div>
+    </div>
+  );
+}
+
+function FinCard({ rows, k, label, note, dark }){
+  const data = (rows||[]).filter(r => r[k]!=null).map(r => ({ y:r.y, v:+B(r[k]) }));
+  const last = data[data.length-1], prev = data[data.length-2];
+  const ch = last && prev && prev.v ? (last.v-prev.v)/Math.abs(prev.v)*100 : null;
+  const fg = dark ? "#fff" : "#111827", sub = dark ? "rgba(255,255,255,.75)" : "#9ca3af";
+  return (
+    <div className="card" style={{padding:"16px 14px",background:dark?"#22c55e":"#fff"}}>
+      <div style={{fontSize:12,fontWeight:700,color:sub}}>{label}</div>
+      {rows===undefined ? <><Sk w={70} h={26} mt={4}/><Sk h={50} mt={10}/></>
+        : !last ? <p style={{fontSize:12,color:sub,marginTop:8}}>אין נתונים</p> : <>
+          <div style={{fontSize:24,fontWeight:900,color:fg,letterSpacing:"-.5px"}}>${last.v}B</div>
+          {ch!=null && <div style={{fontSize:11,fontWeight:700,color:dark?"#fff":ch>=0?"#16a34a":"#dc2626"}}>{ch>=0?"▲":"▼"} {Math.abs(ch).toFixed(0)}% מהשנה הקודמת</div>}
+          <ResponsiveContainer width="100%" height={52}>
+            <BarChart data={data} margin={{top:8,right:0,bottom:0,left:0}}>
+              <Bar dataKey="v" radius={[4,4,0,0]} isAnimationActive={false}>
+                {data.map((_,i) => <Cell key={i} fill={dark ? (i===data.length-1?"#fff":"rgba(255,255,255,.35)") : (i===data.length-1?"#111827":"#e5e7eb")}/>)}
+              </Bar>
+            </BarChart>
+          </ResponsiveContainer>
+          <div style={{display:"flex",justifyContent:"space-between",fontSize:10,color:sub}}><span>{data[0]?.y}</span><span>{last.y}</span></div>
+          <p style={{fontSize:11,color:sub,marginTop:6}}>{note}</p>
+        </>}
+    </div>
+  );
+}
+
+/* ══════════════════════════════════════
+   APP
+══════════════════════════════════════ */
+function App(){
+  const [keys, setKeys] = useState(() => ({ fh: store.get("fhKey") || "", td: store.get("tdKey") || "" }));
+  const [sym, setSym] = useState(null);
+  const [settings, setSettings] = useState(false);
+  const [booting, setBooting] = useState(() => !!DEFAULT_FH && !store.get("fhKey"));
+
+  const save = (k) => {
+    store.set("fhKey", k.fh); store.set("tdKey", k.td || null);
+    Object.keys(mem).forEach(id => delete mem[id]);
+    setKeys(k); setSettings(false);
+  };
+
+  // First run: connect automatically with the built-in key
+  useEffect(() => {
+    if (!booting) return;
+    findWorkingKey(candidates(DEFAULT_FH)).then(k => {
+      if (k) save({ fh:k, td:keys.td });
+      setBooting(false);
+    });
+  }, []);
+
+  if (booting) return (
+    <><G/><div style={{minHeight:"100vh",display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",gap:12}}>
+      <span className="spin" style={{fontSize:28,color:"#22c55e"}}>↻</span>
+      <span style={{fontSize:14,fontWeight:700,color:"#6b7280"}}>מתחבר לנתוני הבורסה...</span>
+    </div></>
+  );
+
+  if (!keys.fh) return <><G/><SetupScreen keys={keys} onSave={save}/></>;
+
+  return (
+    <>
+      <G/>
+      {sym
+        ? <StockPage key={sym} sym={sym} keys={keys} onBack={()=>setSym(null)} onSettings={()=>setSettings(true)}/>
+        : <HomePage keyFH={keys.fh} onSelect={setSym} onSettings={()=>setSettings(true)}/>}
+      {settings && (
+        <div className="sheet" onClick={()=>setSettings(false)}>
+          <div onClick={e=>e.stopPropagation()}>
+            <div style={{fontSize:18,fontWeight:900,marginBottom:16}}>⚙️ חיבור נתונים</div>
+            <KeyForm keys={keys} onSave={save} compact/>
+          </div>
+        </div>
+      )}
+    </>
+  );
+}
+
+ReactDOM.createRoot(document.getElementById("root")).render(<App/>);
+</script>
+</body>
+</html>
