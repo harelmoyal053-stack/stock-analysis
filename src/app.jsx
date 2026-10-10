@@ -167,6 +167,8 @@ const api = {
   }),
   metric:  (s,k) => cached(`m:${s}`,  216e5, () => fh("/stock/metric",{symbol:s,metric:"all"},k).then(r=>({ ...(r.metric||{}), _series: r.series||{} }))),
   earn:    (s,k) => cached(`e:${s}`,  216e5, () => fh("/stock/earnings",{symbol:s},k)),
+  peers:   (s,k) => cached(`pr:${s}`, 864e5, () => fh("/stock/peers",{symbol:s},k).then(a => (a||[]).filter(x => x!==s && !/[.]/.test(x)).slice(0,5))),
+  insider: (s,k) => cached(`in:${s}`, 216e5, () => fh("/stock/insider-transactions",{symbol:s,from:ymd(new Date(Date.now()-182*864e5))},k).then(r => r.data||[])),
   rec:     (s,k) => cached(`r:${s}`,  216e5, () => fh("/stock/recommendation",{symbol:s},k)),
   news:    (s,k) => cached(`n:${s}`,  9e5,   () => fh("/company-news",{symbol:s,from:ymd(new Date(Date.now()-7*864e5)),to:ymd(new Date())},k).then(a=>(a||[]).slice(0,5))),
   fin:     (s,k) => cached(`f:${s}`,  864e5, () => fh("/stock/financials-reported",{symbol:s,freq:"annual"},k).then(parseFin)),
@@ -206,16 +208,39 @@ const series = (s, range, key) => cached(`ts:${s}:${range}`, range==="1D"?6e4:36
   return (j.values||[]).map(v => ({ t:v.datetime, p:+v.close })).reverse();
 });
 
-/* Parse annual revenue + net income from SEC filings */
-const REV = ["us-gaap_Revenues","us-gaap_RevenueFromContractWithCustomerExcludingAssessedTax","us-gaap_SalesRevenueNet","us-gaap_RevenueFromContractWithCustomerIncludingAssessedTax"];
-const NI  = ["us-gaap_NetIncomeLoss","us-gaap_ProfitLoss","us-gaap_NetIncomeLossAvailableToCommonStockholdersBasic"];
-const pick = (ic,list) => { for (const c of list){ const f = ic.find(x=>x.concept===c); if (f && typeof f.value==="number") return f.value; } return null; };
+/* Parse the annual reports companies file with the SEC (income statement, balance sheet, cash flow) */
+const G_ = s => s.split(" ").map(x => "us-gaap_"+x);
+const REV   = G_("Revenues RevenueFromContractWithCustomerExcludingAssessedTax SalesRevenueNet RevenueFromContractWithCustomerIncludingAssessedTax");
+const NI    = G_("NetIncomeLoss ProfitLoss NetIncomeLossAvailableToCommonStockholdersBasic");
+const GROSS = G_("GrossProfit");
+const COGS  = G_("CostOfRevenue CostOfGoodsAndServicesSold CostOfGoodsSold CostOfServices");
+const OPCF  = G_("NetCashProvidedByUsedInOperatingActivities NetCashProvidedByUsedInOperatingActivitiesContinuingOperations");
+const CAPEX = G_("PaymentsToAcquirePropertyPlantAndEquipment PaymentsToAcquireProductiveAssets");
+const CASH  = G_("CashAndCashEquivalentsAtCarryingValue CashCashEquivalentsRestrictedCashAndRestrictedCashEquivalents Cash");
+const MKTS  = G_("MarketableSecuritiesCurrent ShortTermInvestments AvailableForSaleSecuritiesDebtSecuritiesCurrent");
+const DEBT_PARTS = G_("LongTermDebtCurrent LongTermDebtNoncurrent CommercialPaper ShortTermBorrowings DebtCurrent LongTermDebtAndCapitalLeaseObligations");
+const DEBT_TOTAL = G_("LongTermDebt DebtLongtermAndShorttermCombinedAmount");
+const ACQ   = G_("PaymentsToAcquireBusinessesNetOfCashAcquired PaymentsToAcquireBusinessesGross");
+const GW    = G_("Goodwill");
+const pick = (rows,list) => { for (const c of list){ const f = rows.find(x=>x.concept===c); if (f && typeof f.value==="number") return f.value; } return null; };
 function parseFin(d){
   const byYear = {};
   for (const r of d?.data||[]) {
-    const ic = r.report?.ic || [];
+    const ic = r.report?.ic || [], bs = r.report?.bs || [], cf = r.report?.cf || [];
     const rev = pick(ic,REV), ni = pick(ic,NI);
-    if (!byYear[r.year] && (rev!=null || ni!=null)) byYear[r.year] = { y:String(r.year), rev, ni };
+    if (byYear[r.year] || (rev==null && ni==null)) continue;
+    const cogs = pick(ic,COGS);
+    const gross = pick(ic,GROSS) ?? (rev!=null && cogs!=null ? rev - cogs : null);
+    const opcf = pick(cf,OPCF), capex = pick(cf,CAPEX);
+    const parts = DEBT_PARTS.map(c => pick(bs,[c])).filter(v => v!=null);
+    const debt = parts.length ? parts.reduce((a,b)=>a+b,0) : pick(bs,DEBT_TOTAL);
+    const cash0 = pick(bs,CASH), mkts = pick(bs,MKTS);
+    byYear[r.year] = {
+      y:String(r.year), rev, ni, gross,
+      opcf, capex, fcf: opcf!=null ? opcf - Math.abs(capex||0) : null,
+      cash: cash0!=null ? cash0 + (mkts||0) : null, debt: debt ?? 0,
+      acq: Math.abs(pick(cf,ACQ) || 0), gw: pick(bs,GW),
+    };
   }
   return Object.values(byYear).sort((a,b)=>a.y-b.y).slice(-5);
 }
@@ -670,7 +695,7 @@ function StockPage({ sym, keys, onBack, onSettings, go, view }){
     let alive = true;
     const set = (k) => (v) => alive && setD(x => ({ ...x, [k]: v }));
     const fail = (k) => (e) => { if (!alive) return; setD(x => ({ ...x, [k]: null })); if (e.message==="auth") setErr(e); };
-    ["profile","metric","rec","news","fin","earn"].forEach(k => api[k](sym,keys.fh).then(set(k)).catch(fail(k)));
+    ["profile","metric","rec","news","fin","earn","peers","insider"].forEach(k => api[k](sym,keys.fh).then(set(k)).catch(fail(k)));
     const tick = () => api.quote(sym,keys.fh).then(v => { set("quote")(v); alive && setErr(null); }).catch(e => alive && setErr(e));
     tick(); const id = setInterval(tick, 10000);
     return () => { alive = false; clearInterval(id); };
@@ -682,9 +707,9 @@ function StockPage({ sym, keys, onBack, onSettings, go, view }){
     return () => { alive = false; };
   }, [sym, range, keys.td]);
 
-  const { quote, profile, metric, rec, news, fin, earn } = d;
+  const { quote, profile, metric, rec, news, fin, earn, peers, insider } = d;
   const up = (quote?.dp ?? 0) >= 0;
-  const summary = buildSummary({ fin, rec, metric, quote });
+  const peerM = usePeerMetrics(peers, keys.fh);
   const r = rec?.[0];
   const buy = r ? r.buy + r.strongBuy : 0, sell = r ? r.sell + r.strongSell : 0, hold = r?.hold || 0;
   const tot = buy + hold + sell;
@@ -784,71 +809,20 @@ function StockPage({ sym, keys, onBack, onSettings, go, view }){
           </div>}
         </div>
 
-        {/* ── Investor checklist ── */}
-        <HealthCheck metric={metric}/>
-
-        {/* ── Smart summary ── */}
-        <div className="fu">
-          <div className="hd">🤖 סיכום חכם</div>
-          <p className="ex">מחושב אוטומטית מהנתונים האמיתיים של החברה.</p>
-          <div style={{background:"var(--ink)",borderRadius:20,padding:"20px 18px"}}>
-            {fin===undefined || rec===undefined
-              ? [1,2,3].map(i => <div key={i} className="sk" style={{height:15,marginTop:i>1?12:0,opacity:.15}}/>)
-              : <>
-                {(summary.growing!=null || summary.profitable!=null) && (
-                  <div style={{display:"flex",gap:8,marginBottom:16,flexWrap:"wrap"}}>
-                    {summary.growing!=null && <Tag good={summary.growing} text={summary.growing?"📈 צומחת":"📉 בירידה"}/>}
-                    {summary.profitable!=null && <Tag good={summary.profitable} text={summary.profitable?"💰 רווחית":"⚠️ מפסידה"}/>}
-                  </div>
-                )}
-                {summary.pts.length ? summary.pts.map((p,i) => (
-                  <div key={i} style={{display:"flex",gap:12,marginTop:i?12:0}}>
-                    <span style={{fontSize:16}}>{p.i}</span><span style={{fontSize:14,color:"#d1d5db",lineHeight:1.55}}>{p.t}</span>
-                  </div>
-                )) : <p style={{color:"#9ca3af",fontSize:13}}>אין מספיק נתונים לסיכום עבור המניה הזו.</p>}
-              </>}
-          </div>
+        {/* ── The 8 questions to answer before investing ── */}
+        <div style={{padding:"6px 2px 0"}}>
+          <div style={{fontWeight:900,fontSize:19,color:"var(--fg)"}}>🔍 בדיקה לפני השקעה</div>
+          <p className="ex" style={{marginTop:2,marginBottom:0}}>8 השאלות שכדאי לענות עליהן לפני שקונים מניה, לפי הסדר.</p>
         </div>
-
-        {/* ── Financials ── */}
-        {fin !== null && (
-          <div className="fu">
-            <div className="hd">💰 הכנסות ורווח</div>
-            <p className="ex">מתוך הדוחות השנתיים הרשמיים של החברה (במיליארדי דולר).</p>
-            <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:12}}>
-              <FinCard rows={fin} k="rev" label="הכנסות" note="כל הכסף שנכנס לחברה" dark/>
-              <FinCard rows={fin} k="ni"  label="רווח נקי" note="מה שנשאר אחרי ההוצאות"/>
-            </div>
-          </div>
-        )}
-
-        {/* ── Analysts ── */}
-        {rec !== null && (
-          <div className="fu">
-            <div className="hd">📊 מה חושבים האנליסטים</div>
-            <p className="ex">המלצות של אנליסטים מבנקים וחברות השקעה{r?.period ? ` (נכון ל-${r.period})` : ""}.</p>
-            <div className="card" style={{padding:18}}>
-              {rec===undefined ? <Sk h={60}/> : tot ? <>
-                <div style={{display:"flex",height:12,borderRadius:99,overflow:"hidden",gap:2}}>
-                  <div style={{flex:buy,background:"#22c55e"}}/><div style={{flex:hold,background:"#f59e0b"}}/><div style={{flex:sell,background:"#ef4444"}}/>
-                </div>
-                <div style={{display:"flex",justifyContent:"space-between",marginTop:12}}>
-                  {[["קנייה",buy,"#16a34a"],["החזקה",hold,"#ca8a04"],["מכירה",sell,"#dc2626"]].map(([l,v,c]) => (
-                    <div key={l} style={{textAlign:"center"}}>
-                      <div style={{fontSize:20,fontWeight:900,color:c}}>{v}</div>
-                      <div style={{fontSize:12,color:"var(--muted)",fontWeight:600}}>{l}</div>
-                    </div>
-                  ))}
-                </div>
-              </> : <p style={{fontSize:13,color:"#9ca3af"}}>אין המלצות זמינות למניה הזו.</p>}
-            </div>
-          </div>
-        )}
-
-        {/* ── More charts ── */}
-        <EarningsCard earn={earn}/>
-        <MarginCard metric={metric}/>
-        <AnalystTrendCard rec={rec}/>
+        <S1Business sym={sym} profile={profile}/>
+        <S2Growth fin={fin} metric={metric}/>
+        <S3Profit fin={fin} metric={metric}/>
+        <S4Debt fin={fin} metric={metric}/>
+        <S5Valuation metric={metric} peerM={peerM}/>
+        <S6Moat sym={sym} metric={metric} peerM={peerM}/>
+        <S7Management sym={sym} earn={earn} insider={insider}/>
+        <S8Outlook sym={sym} rec={rec} metric={metric} fin={fin}/>
+        <p className="ex" style={{textAlign:"center",margin:0}}>הצבעים הם כללי אצבע ולא המלצת השקעה. מה שנחשב "טוב" משתנה בין תעשיות.</p>
 
         {/* ── News ── */}
         {news !== null && (
@@ -872,6 +846,378 @@ function StockPage({ sym, keys, onBack, onSettings, go, view }){
       </div>
       <BottomNav view={view} go={v=>{ onBack(); go(v); }} onSettings={onSettings}/>
     </div>
+  );
+}
+
+/* ══════════════════════════════════════
+   WRITTEN COMPANY PROFILES (approximate, as of mid-2026)
+   Free data has no product breakdown, executives or risks, so these are written by hand
+   for the most-followed companies. Shares of revenue are rounded.
+══════════════════════════════════════ */
+const DEEP = {
+  AAPL:{ ceo:"טים קוק (מנכ״ל מאז 2011)",
+    money:[["אייפון","כחצי מההכנסות"],["שירותים (App Store, iCloud, Apple Music, תשלומים)","כרבע, והחלק הרווחי ביותר"],["מחשבי מק","כ-8%"],["אייפד","כ-7%"],["שעונים, אוזניות ואביזרים","כ-9%"]],
+    customers:"מאות מיליוני צרכנים פרטיים בכל העולם. כ-40% מההכנסות מאמריקה, כרבע מאירופה ובערך 15% מסין.",
+    moat:["מותג מהחזקים בעולם, שמאפשר לגבות מחירים גבוהים","מערכת סגורה: מי שיש לו אייפון, מק ושעון של אפל מתקשה לעזוב","יותר משני מיליארד מכשירים פעילים שמזינים את עסק השירותים"],
+    risks:["תלות גדולה באייפון — שנה חלשה במכירות מורגשת מיד","תחרות והגבלות בסין","רגולציה על App Store והעמלות שאפל גובה","אפל נחשבת מאחרת בתחום הבינה המלאכותית"] },
+  NVDA:{ ceo:"ג׳נסן הואנג (מייסד, מנכ״ל מאז 1993)",
+    money:[["מרכזי נתונים (שבבי AI לענן)","כ-85%–90% מההכנסות"],["גיימינג (כרטיסי מסך)","כ-8%"],["רכב, רובוטיקה ותחנות עבודה","השאר"]],
+    customers:"בעיקר חברות הענן הגדולות (מיקרוסופט, אמזון, גוגל, מטא) וחברות AI. מספר קטן של לקוחות אחראי לחלק גדול מהמכירות.",
+    moat:["CUDA: התוכנה שכמעט כל מפתחי ה-AI רגילים אליה, וקשה לעבור ממנה","מובילה טכנולוגית בשבבי AI בפער גדול","רשת שלמה של שבבים, תקשורת ותוכנה שנמכרת כחבילה"],
+    risks:["תלות בכמה לקוחות ענקיים שמפתחים גם שבבים משלהם","הגבלות ייצוא לסין","אם ההשקעות בבינה מלאכותית יאטו, ההכנסות עלולות לרדת חד","המחיר כבר מגלם ציפיות גבוהות מאוד"] },
+  TSLA:{ ceo:"אילון מאסק (מנכ״ל מאז 2008)",
+    money:[["מכירת רכבים חשמליים","כשלושה רבעים מההכנסות"],["אגירת אנרגיה (סוללות לבתים ולחברות חשמל)","כ-10%, וצומח מהר"],["שירות, טעינה ותוכנה (כולל נהיגה אוטונומית)","השאר"]],
+    customers:"צרכנים פרטיים, בעיקר בארה״ב, סין ואירופה, וחברות חשמל שקונות מערכות אגירה.",
+    moat:["מותג חזק ורשת טעינה גדולה","הרבה נתוני נהיגה לאימון מערכות אוטונומיות","ייצור יעיל של סוללות ורכבים"],
+    risks:["תחרות חזקה מיצרניות סיניות כמו BYD","ירידה במחירי הרכבים פוגעת ברווח","חלק גדול מהשווי נשען על הבטחות לרובוטקסי ורובוטים","תלות רבה באילון מאסק"] },
+  MSFT:{ ceo:"סאטיה נאדלה (מנכ״ל מאז 2014)",
+    money:[["ענן Azure ושרתים","כ-40% מההכנסות, וצומח מהר"],["Office, Teams ולינקדאין","כשליש"],["Windows, Xbox וחיפוש Bing","השאר"]],
+    customers:"בעיקר חברות וארגונים בכל העולם שמשלמים מנויים חודשיים, וגם צרכנים פרטיים.",
+    moat:["כמעט כל ארגון בעולם עובד עם Office ו-Windows, וקשה לעבור","הכנסות קבועות ממנויים","שותפות עם OpenAI ומיקום מוביל בבינה מלאכותית לעסקים"],
+    risks:["הוצאה עצומה על מרכזי נתונים ל-AI שעוד צריכה להחזיר את עצמה","תחרות בענן מאמזון וגוגל","רגולציה והגבלים עסקיים"] },
+  GOOGL:{ ceo:"סונדאר פיצ׳אי (מנכ״ל מאז 2015)",
+    money:[["פרסום בחיפוש גוגל","כ-55% מההכנסות"],["פרסום ביוטיוב","כ-10%"],["Google Cloud","כ-13%, וצומח מהר"],["מנויים, אנדרואיד ומכשירים","השאר"]],
+    customers:"מפרסמים (מעסקים קטנים ועד ענקיים) שמשלמים כדי להופיע בחיפוש וביוטיוב, וחברות שקונות שירותי ענן.",
+    moat:["מנוע החיפוש הנפוץ בעולם","יוטיוב, אנדרואיד וכרום — מיליארדי משתמשים","יכולות AI חזקות ושבבים משלה"],
+    risks:["צ׳אטבוטים של AI עלולים לקחת חלק מהחיפוש","תביעות הגבלים עסקיים בארה״ב ובאירופה","תלות גדולה בפרסום, שנפגע כשהכלכלה מאטה"] },
+  AMZN:{ ceo:"אנדי ג׳סי (מנכ״ל מאז 2021)",
+    money:[["חנות אונליין","כ-40% מההכנסות"],["עמלות ממוכרים חיצוניים","כרבע"],["ענן AWS","פחות מחמישית מההכנסות, אבל רוב הרווח"],["פרסום","כ-9%, וצומח מהר"],["מנויי פריים","כ-7%"]],
+    customers:"צרכנים פרטיים, מוכרים שמשתמשים בפלטפורמה, וחברות שקונות שירותי ענן.",
+    moat:["רשת לוגיסטיקה ומשלוחים שקשה מאוד להעתיק","AWS — ספקית הענן הגדולה בעולם","פריים: מאות מיליוני מנויים נאמנים"],
+    risks:["מרווחי רווח נמוכים בקמעונאות","תחרות בענן ממיקרוסופט וגוגל","הוצאות ענק על מרכזי נתונים","רגולציה ותביעות הגבלים עסקיים"] },
+  META:{ ceo:"מארק צוקרברג (מייסד, מנכ״ל מאז 2004)",
+    money:[["פרסום בפייסבוק, אינסטגרם ו-וואטסאפ","כ-97% מההכנסות"],["Reality Labs (משקפיים ומציאות מדומה)","קטן מאוד, ומפסיד מיליארדים"]],
+    customers:"מפרסמים מכל הגדלים שרוצים להגיע לכ-3 מיליארד משתמשים יומיים.",
+    moat:["אפקט רשת: כולם שם כי כולם שם","כמות עצומה של נתונים לטירגוט פרסומות","AI שמשפר את התאמת הפרסומות"],
+    risks:["תלות כמעט מלאה בפרסום","הוצאות ענק על AI ועל מציאות מדומה","רגולציה על פרטיות ועל בני נוער","צוקרברג שולט בחברה לבד"] },
+  NFLX:{ ceo:"טד סרנדוס וגרג פיטרס (מנכ״לים משותפים)",
+    money:[["מנויים חודשיים","כמעט כל ההכנסות"],["פרסומות (במנוי הזול)","קטן, וצומח"]],
+    customers:"מאות מיליוני מנויים בכמעט כל מדינה בעולם.",
+    moat:["שירות הסטרימינג הגדול בעולם","תקציב תוכן ענק שמתחלק על הרבה מנויים","המלצות מותאמות אישית"],
+    risks:["תחרות מדיסני+, אמזון, יוטיוב ואחרים","עלויות תוכן גבוהות","אם קצב הצטרפות המנויים יאט, המחיר עלול לרדת"] },
+  AMD:{ ceo:"ליסה סו (מנכ״לית מאז 2014)",
+    money:[["מרכזי נתונים (מעבדי שרתים ושבבי AI)","כמחצית מההכנסות"],["מעבדים למחשבים","כרבע"],["גיימינג וקונסולות","כ-10%"],["שבבים משובצים","כ-10%"]],
+    customers:"יצרניות מחשבים ושרתים, חברות ענן, סוני ומיקרוסופט (קונסולות).",
+    moat:["מעבדים תחרותיים מול אינטל","האלטרנטיבה המרכזית לאנבידיה בשבבי AI","עבודה עם TSMC, יצרנית השבבים המתקדמת בעולם"],
+    risks:["תחרות קשה מאנבידיה ומאינטל","תלות ב-TSMC בטייוואן","שוק השבבים עולה ויורד חזק"] },
+  INTC:{ ceo:"ליפ-בו טאן (מנכ״ל מאז 2025)",
+    money:[["מעבדים למחשבים","כ-55% מההכנסות"],["מעבדים לשרתים ומרכזי נתונים","כ-30%"],["ייצור שבבים לחברות אחרות ותחומים נוספים","השאר"]],
+    customers:"יצרניות מחשבים (דל, HP, לנובו), חברות ענן וממשלות.",
+    moat:["מפעלי ייצור משלה בארה״ב, באירופה ובישראל","קשרים ארוכים עם יצרניות המחשבים"],
+    risks:["איבדה נתח שוק ל-AMD ולשבבים של אפל","השקעה ענקית במפעלים שעוד לא החזירה את עצמה","מאחרת בשבבי AI"] },
+  TEVA:{ ceo:"ריצ׳רד פרנסיס (מנכ״ל מאז 2023)",
+    money:[["תרופות גנריות (חיקויים זולים)","כמחצית מההכנסות"],["תרופות מקוריות (אוסטדו, אג׳ובי, אוזדי)","צומחות מהר"],["קופקסון ותרופות ותיקות","בירידה"]],
+    customers:"בתי מרקחת, קופות חולים, ביטוחי בריאות ובתי חולים. בערך מחצית מההכנסות מארה״ב.",
+    moat:["אחת מיצרניות התרופות הגנריות הגדולות בעולם","מגוון ענק של תרופות ומפעלים"],
+    risks:["חוב גדול שנשאר מרכישות עבר","תחרות מחירים חזקה בתרופות גנריות","פקיעת פטנטים על תרופות מקוריות"] },
+  CHKP:{ ceo:"נדב צפריר (מנכ״ל מאז 2024)",
+    money:[["מנויי אבטחה","כמחצית מההכנסות"],["תמיכה ותחזוקה","כשליש"],["מכירת מוצרים ורישיונות","השאר"]],
+    customers:"חברות, בנקים וממשלות בכל העולם שצריכות להגן על הרשתות שלהן.",
+    moat:["עשרות אלפי לקוחות ותיקים שקשה להם להחליף ספק","רווחיות מהגבוהות בתעשייה","הכנסות קבועות ממנויים"],
+    risks:["צמיחה איטית יחסית למתחרות","תחרות מפאלו אלטו, פורטינט וקראודסטרייק","מעבר של לקוחות לאבטחה בענן"] },
+};
+
+/* ══════════════════════════════════════
+   STOCK PAGE SECTIONS — the 8 questions to answer before investing
+══════════════════════════════════════ */
+const pctTxt = v => `${v>=0?"+":"−"}${Math.abs(v).toFixed(v!=null&&Math.abs(v)<10?1:0)}%`;
+const B$ = v => v==null ? "—" : `${v<0?"−":""}$${Math.abs(v/1e9).toFixed(Math.abs(v)<1e10?1:0)}B`;
+const median = a => { const x = a.filter(v => v!=null && isFinite(v) && v>0).sort((p,q)=>p-q); return x.length ? x[Math.floor(x.length/2)] : null; };
+const VERD = { g:["#16a34a","var(--gbg)"], y:["#ca8a04","rgba(234,179,8,.15)"], r:["#dc2626","var(--rbg)"] };
+
+function Section({ n, title, ask, verdict, children }){
+  return (
+    <div className="card fu" style={{padding:"16px 16px 18px"}}>
+      <div style={{display:"flex",gap:10,alignItems:"flex-start"}}>
+        <span style={{flexShrink:0,width:28,height:28,borderRadius:9,background:"var(--ink)",color:"#fff",fontWeight:900,fontSize:14,display:"flex",alignItems:"center",justifyContent:"center"}}>{n}</span>
+        <div style={{flex:1,minWidth:0}}>
+          <div style={{fontWeight:900,fontSize:17,color:"var(--fg)",lineHeight:1.3}}>{title}</div>
+          <div style={{fontSize:12,color:"#9ca3af",marginTop:2,lineHeight:1.4}}>{ask}</div>
+        </div>
+      </div>
+      {verdict && (
+        <div style={{marginTop:12,background:VERD[verdict[0]][1],color:VERD[verdict[0]][0],borderRadius:12,padding:"9px 12px",fontWeight:800,fontSize:14,lineHeight:1.45}}>
+          {verdict[1]}
+        </div>
+      )}
+      <div style={{marginTop:12,display:"flex",flexDirection:"column",gap:12}}>{children}</div>
+    </div>
+  );
+}
+const Line2 = ({ l, v, sub, color }) => (
+  <div style={{display:"flex",justifyContent:"space-between",gap:10,alignItems:"baseline",padding:"2px 0"}}>
+    <span style={{fontSize:13,color:"var(--muted)",fontWeight:600}}>{l}{sub && <span style={{display:"block",fontSize:11,color:"#9ca3af",fontWeight:500}}>{sub}</span>}</span>
+    <span style={{fontSize:14,fontWeight:800,color:color||"var(--fg)",whiteSpace:"nowrap"}}>{v}</span>
+  </div>
+);
+const Bullets = ({ items, icon="•", color="var(--fg2)" }) => (
+  <div style={{display:"flex",flexDirection:"column",gap:6}}>
+    {items.map((t,i) => <div key={i} style={{display:"flex",gap:8,fontSize:13,color,lineHeight:1.5}}><span style={{flexShrink:0}}>{icon}</span><span>{t}</span></div>)}
+  </div>
+);
+const Note = ({ children }) => <p style={{fontSize:12,color:"var(--fg2)",background:"var(--soft2)",borderRadius:10,padding:"8px 10px",lineHeight:1.5}}>{children}</p>;
+const Loading = () => <><Sk h={14}/><Sk h={14} w="80%"/><Sk h={60}/></>;
+
+function YearBars({ rows, series, height=130, fmt=B$ }){
+  const data = rows.map(r => ({ label:r.y, ...Object.fromEntries(series.map(s => [s.k, r[s.k]!=null ? +(r[s.k]/1e9).toFixed(2) : null])) }));
+  return <>
+    <ResponsiveContainer width="100%" height={height}>
+      <BarChart data={data} margin={{top:6,right:2,bottom:0,left:2}} barGap={2}>
+        <XAxis dataKey="label" tick={axisTick} axisLine={false} tickLine={false}/>
+        <YAxis hide domain={[d=>Math.min(0,d),"auto"]}/>
+        <ReferenceLine y={0} stroke="#9ca3af" strokeOpacity={.4}/>
+        <Tooltip cursor={{fill:"rgba(0,0,0,.04)"}} content={<ChartTip fmt={v=>`$${v}B`}/>}/>
+        {series.map(s => <Bar key={s.k} dataKey={s.k} name={s.name} fill={s.c} radius={[4,4,0,0]} isAnimationActive={false}/>)}
+      </BarChart>
+    </ResponsiveContainer>
+    {series.length>1 && <Legend2 items={series.map(s=>[s.c,s.name])}/>}
+  </>;
+}
+
+/* 1 — the business */
+function S1Business({ sym, profile }){
+  const D = DEEP[sym];
+  return (
+    <Section n={1} title="הבנת העסק" ask="מה החברה עושה, איך היא מרוויחה כסף ומי הלקוחות שלה">
+      <p style={{fontSize:14,color:"var(--fg)",lineHeight:1.6}}>{HE[sym]?.d || (profile?.name ? `${profile.name} פועלת בתחום ${indOf(profile) || "—"}.` : "")}</p>
+      {D ? <>
+        <div>
+          <div style={{fontWeight:800,fontSize:14,color:"var(--fg)",marginBottom:6}}>💵 מאיפה מגיע הכסף</div>
+          {D.money.map(([what,share]) => <Line2 key={what} l={what} v={share}/>)}
+        </div>
+        <div>
+          <div style={{fontWeight:800,fontSize:14,color:"var(--fg)",marginBottom:4}}>👥 מי הלקוחות</div>
+          <p style={{fontSize:13,color:"var(--fg2)",lineHeight:1.55}}>{D.customers}</p>
+        </div>
+      </> : <Note>פירוט מוצרים ולקוחות כתוב כרגע רק לחברות הגדולות. כאן מופיעים הפרטים הבסיסיים.</Note>}
+      {profile && <div style={{display:"flex",flexWrap:"wrap",gap:6}}>
+        {[indOf(profile), profile.country && `מדינה: ${profile.country}`, profile.ipo && `בבורסה מאז ${profile.ipo.slice(0,4)}`, profile.exchange && profile.exchange.split(" ")[0]].filter(Boolean)
+          .map(t => <span key={t} style={{fontSize:12,background:"var(--soft)",color:"var(--fg2)",borderRadius:8,padding:"4px 10px",fontWeight:600}}>{t}</span>)}
+      </div>}
+      {profile?.weburl && <a href={profile.weburl} target="_blank" rel="noopener noreferrer" style={{fontSize:13,color:"#16a34a",fontWeight:700}}>האתר של החברה ←</a>}
+    </Section>
+  );
+}
+
+/* 2 — revenue growth */
+function S2Growth({ fin, metric }){
+  if (fin === null) return null;
+  const rows = (fin||[]).filter(r => r.rev!=null);
+  let verdict = null, body = <Loading/>;
+  if (fin) {
+    if (rows.length < 2) return null;
+    const first = rows[0], last = rows[rows.length-1], yrs = rows.length-1;
+    const cagr = (Math.pow(last.rev/first.rev, 1/yrs) - 1) * 100;
+    const yoy = rows.slice(1).map((r,i) => ({ y:r.y, g:(r.rev/rows[i].rev-1)*100 }));
+    const acq = rows.slice(1).reduce((a,r) => a + (r.acq||0), 0);
+    const added = last.rev - first.rev;
+    const gw0 = rows.find(r => r.gw!=null)?.gw, gw1 = [...rows].reverse().find(r => r.gw!=null)?.gw;
+    const bigAcq = (added > 0 && acq > added * 0.25) || (gw0!=null && gw1!=null && gw1 - gw0 > added * 0.25 && gw1 > gw0 * 1.3);
+    const ttm = metric?.revenueGrowthTTMYoy;
+    verdict = [cagr>=10?"g":cagr>=0?"y":"r",
+      cagr>=0 ? `ההכנסות גדלו בממוצע ${cagr.toFixed(1)}% בשנה ב-${yrs} השנים האחרונות` : `ההכנסות ירדו בממוצע ${Math.abs(cagr).toFixed(1)}% בשנה ב-${yrs} השנים האחרונות`];
+    body = <>
+      <YearBars rows={rows} series={[{k:"rev",name:"הכנסות",c:"#22c55e"}]}/>
+      <div>
+        {yoy.map(x => <Line2 key={x.y} l={`שינוי ב-${x.y}`} v={pctTxt(x.g)} color={x.g>=0?"#16a34a":"#dc2626"}/>)}
+        {ttm!=null && <Line2 l="12 החודשים האחרונים" sub="לעומת 12 החודשים שלפניהם" v={pctTxt(ttm)} color={ttm>=0?"#16a34a":"#dc2626"}/>}
+      </div>
+      <Note>{added<=0 ? "ההכנסות לא גדלו בתקופה הזו." : bigAcq
+        ? `🔎 חלק ניכר מהצמיחה כנראה הגיע מרכישת חברות אחרות (החברה הוציאה בערך ${B$(acq)} על רכישות). צמיחה מרכישות פחות "בריאה" מצמיחה עצמית.`
+        : `✅ הצמיחה הגיעה בעיקר מהפעילות של החברה עצמה, לא מרכישות גדולות${acq>0?` (על רכישות הוצאו רק ${B$(acq)})`:""}.`}</Note>
+    </>;
+  }
+  return <Section n={2} title="צמיחת הכנסות" ask="כמה ההכנסות גדלו ב-3–5 השנים האחרונות, ומאיפה הצמיחה הגיעה" verdict={verdict}>{body}</Section>;
+}
+
+/* 3 — profitability and free cash flow */
+function S3Profit({ fin, metric }){
+  if (fin === null && metric === null) return null;
+  let verdict = null, body = <Loading/>;
+  if (fin !== undefined && metric !== undefined) {
+    const rows = (fin||[]).filter(r => r.ni!=null || r.fcf!=null);
+    const last = rows[rows.length-1] || {};
+    const gm = metric?.grossMarginTTM, gm5 = metric?.grossMargin5Y, nm = metric?.netProfitMarginTTM, nm5 = metric?.netProfitMargin5Y;
+    const fcf = last.fcf, ni = last.ni;
+    const fcfM = fcf!=null && last.rev ? fcf/last.rev*100 : null;
+    const conv = fcf!=null && ni>0 ? fcf/ni : null;
+    verdict = fcf==null && nm==null ? null :
+      fcf>0 && nm>=10 ? ["g", `כן, החברה מייצרת כסף אמיתי: ${B$(fcf)} תזרים חופשי בשנה האחרונה`] :
+      fcf>0 ? ["y", `החברה מייצרת כסף (${B$(fcf)} תזרים חופשי), אבל הרווחיות לא גבוהה`] :
+      ["r", fcf!=null ? `החברה שורפת כסף: תזרים חופשי שלילי של ${B$(fcf)}` : "החברה לא רווחית"];
+    body = <>
+      <div>
+        {gm!=null && <Line2 l="רווח גולמי" sub="מכל $100 מכירות, כמה נשאר אחרי עלות המוצר" v={`$${gm.toFixed(0)}`}/>}
+        {nm!=null && <Line2 l="רווח נקי" sub="מה שנשאר אחרי כל ההוצאות והמסים" v={nm<0?`הפסד $${Math.abs(nm).toFixed(0)}`:`$${nm.toFixed(0)}`} color={nm<0?"#dc2626":undefined}/>}
+        {fcf!=null && <Line2 l={`תזרים מזומנים חופשי (${last.y})`} sub="הכסף שנכנס בפועל, אחרי השקעות בציוד ומפעלים" v={B$(fcf)} color={fcf<0?"#dc2626":"#16a34a"}/>}
+        {fcfM!=null && <Line2 l="תזרים חופשי מכל $100 מכירות" v={`$${fcfM.toFixed(0)}`}/>}
+      </div>
+      {rows.length>1 && <YearBars rows={rows} series={[{k:"ni",name:"רווח נקי",c:"#94a3b8"},{k:"fcf",name:"תזרים חופשי",c:"#22c55e"}]}/>}
+      {conv!=null && <Note>{conv>=0.9 ? "✅ הרווח מגובה בכסף אמיתי: התזרים החופשי דומה לרווח או גבוה ממנו." : conv>=0.5 ? "🟡 רק חלק מהרווח הופך לכסף בפועל — החברה משקיעה הרבה בציוד או שהכסף מתעכב אצל לקוחות." : "⚠️ הרווח בדוחות גבוה בהרבה מהכסף שנכנס בפועל. כדאי לבדוק למה."}</Note>}
+      {gm5!=null && nm5!=null && <p className="ex" style={{margin:0}}>ממוצע 5 שנים: רווח גולמי ${gm5.toFixed(0)}, רווח נקי ${nm5.toFixed(0)} מכל $100.</p>}
+    </>;
+  }
+  return <Section n={3} title="רווחיות ותזרים מזומנים" ask="האם החברה באמת מייצרת כסף, או רק רווח על הנייר" verdict={verdict}>{body}</Section>;
+}
+
+/* 4 — debt and financial position */
+function S4Debt({ fin, metric }){
+  if (fin === null) return null;
+  let verdict = null, body = <Loading/>;
+  if (fin !== undefined && metric !== undefined) {
+    const rows = (fin||[]).filter(r => r.cash!=null);
+    if (!rows.length) return null;
+    const first = rows[0], last = rows[rows.length-1];
+    const net = last.cash - (last.debt||0);
+    const de = metric?.["totalDebt/totalEquityQuarterly"] ?? metric?.["totalDebt/totalEquityAnnual"];
+    const cr = metric?.currentRatioQuarterly ?? metric?.currentRatioAnnual;
+    const cov = metric?.netInterestCoverageTTM;
+    const debtCh = first.debt>0 ? (last.debt/first.debt-1)*100 : null;
+    verdict = net >= 0 ? ["g", `לחברה יש יותר מזומן מחוב: ${B$(net)} מזומן נטו`]
+      : (de!=null && de<1.5 && (cr==null || cr>=1)) ? ["y", `לחברה יש חוב נטו של ${B$(-net)}, אבל ברמה סבירה`]
+      : ["r", `לחברה חוב נטו גבוה: ${B$(-net)}`];
+    body = <>
+      <div>
+        <Line2 l="מזומן והשקעות נזילות" v={B$(last.cash)} color="#16a34a"/>
+        <Line2 l="חוב" v={B$(last.debt)} color={last.debt>last.cash?"#dc2626":undefined}/>
+        {debtCh!=null && <Line2 l={`שינוי בחוב מאז ${first.y}`} v={pctTxt(debtCh)} color={debtCh>20?"#dc2626":debtCh<-5?"#16a34a":undefined}/>}
+        {cr!=null && <Line2 l="יכולת לשלם חשבונות" sub="נכסים זמינים על כל $1 שצריך לשלם בשנה הקרובה" v={`$${cr.toFixed(2)}`} color={cr<1?"#dc2626":undefined}/>}
+        {cov!=null && cov>0 && <Line2 l="כיסוי ריבית" sub="כמה פעמים הרווח התפעולי מכסה את הריבית" v={cov>100?"מעל פי 100":`פי ${cov.toFixed(1)}`} color={cov<3?"#dc2626":undefined}/>}
+      </div>
+      {rows.length>1 && <YearBars rows={rows} series={[{k:"cash",name:"מזומן",c:"#22c55e"},{k:"debt",name:"חוב",c:"#ef4444"}]}/>}
+      <Note>{cr!=null && cr<1 ? "🟡 לחברה פחות נכסים זמינים ממה שהיא צריכה לשלם השנה. אצל חברות ענק עם תזרים חזק זה לא בהכרח מסוכן." :
+        debtCh>30 ? "⚠️ החוב גדל משמעותית בשנים האחרונות." : "✅ אין סימנים לבעיה בעמידה בהתחייבויות."}</Note>
+    </>;
+  }
+  return <Section n={4} title="חובות ומצב פיננסי" ask="כמה מזומן וכמה חוב יש לחברה, והאם היא יכולה לעמוד בהתחייבויות" verdict={verdict}>{body}</Section>;
+}
+
+/* 5 — valuation */
+function usePeerMetrics(peers, keyFH){
+  const [pm, setPm] = useState(null);
+  const key = (peers||[]).join(",");
+  useEffect(() => {
+    if (!peers?.length) { setPm(peers ? [] : null); return; }
+    let alive = true;
+    Promise.allSettled(peers.slice(0,4).map(s => api.metric(s,keyFH).then(m => ({ s, m }))))
+      .then(rs => alive && setPm(rs.filter(r => r.status==="fulfilled").map(r => r.value)));
+    return () => { alive = false; };
+  }, [key, keyFH]);
+  return pm;
+}
+function S5Valuation({ metric, peerM }){
+  if (metric === null) return null;
+  let verdict = null, body = <Loading/>;
+  if (metric) {
+    const pe = metric.peTTM ?? metric.peBasicExclExtraTTM, fpe = metric.forwardPE, ps = metric.psTTM, ev = metric.evEbitdaTTM;
+    const pfcf = metric.pfcfShareTTM, fcfy = pfcf>0 ? 100/pfcf : null, peg = metric.pegTTM;
+    const pPE = median((peerM||[]).map(x => x.m.peTTM ?? x.m.peBasicExclExtraTTM));
+    const pPS = median((peerM||[]).map(x => x.m.psTTM));
+    const implied = pe>0 && fpe>0 ? (pe/fpe-1)*100 : null;
+    if (!(pe>0)) verdict = ["r","אין לחברה רווח, אז קשה להעריך אם המחיר הגיוני"];
+    else {
+      const cheapVsPeers = pPE ? pe < pPE*0.9 : null, richVsPeers = pPE ? pe > pPE*1.3 : null;
+      verdict = (pe<20 || (peg>0 && peg<1.2) || cheapVsPeers) && !(richVsPeers && peg>2) ? ["g", `המחיר נראה סביר: ${pe.toFixed(0)} שנות רווח${pPE?` (אצל המתחרות ${pPE.toFixed(0)})`:""}`]
+        : (pe>40 && !(peg>0 && peg<1.5)) || (richVsPeers && peg>2) ? ["r", `המניה יקרה: ${pe.toFixed(0)} שנות רווח${pPE?` לעומת ${pPE.toFixed(0)} אצל המתחרות`:""}`]
+        : ["y", `המחיר מלא אבל לא קיצוני: ${pe.toFixed(0)} שנות רווח${pPE?` (מתחרות: ${pPE.toFixed(0)})`:""}`];
+    }
+    const row = (l, sub, v, peer) => <Line2 l={l} sub={sub} v={<span>{v}{peer && <span style={{fontSize:11,color:"#9ca3af",fontWeight:600}}> · מתחרות {peer}</span>}</span>}/>;
+    body = <>
+      <div>
+        {row("מכפיל רווח (P/E)", "כמה שנות רווח משלמים על המניה", pe>0?pe.toFixed(1):"אין רווח", pPE&&pPE.toFixed(1))}
+        {fpe>0 && row("מכפיל רווח עתידי (Forward P/E)", "לפי הרווח הצפוי בשנה הבאה", fpe.toFixed(1))}
+        {ps>0 && row("מכפיל מכירות (P/S)", "כמה שנות מכירות משלמים", ps.toFixed(1), pPS&&pPS.toFixed(1))}
+        {ev>0 && row("EV/EBITDA", "שווי כולל חוב, ביחס לרווח התפעולי", ev.toFixed(1))}
+        {fcfy!=null && row("תשואת תזרים חופשי", "כמה כסף החברה מייצרת ביחס למחיר", `${fcfy.toFixed(1)}%`)}
+      </div>
+      {implied!=null && <Note>📌 <b>מה מגולם במחיר:</b> {implied>0 ? `לפי המכפיל העתידי, השוק מצפה שהרווח יגדל בכ-${implied.toFixed(0)}% בשנה הבאה.` : "לפי המכפיל העתידי, השוק מצפה שהרווח לא יגדל בשנה הבאה, ואולי אפילו ירד."} {peg>0 && (peg<1 ? "ביחס לקצב הצמיחה, המחיר נמוך (PEG מתחת ל-1)." : peg<2 ? "ביחס לקצב הצמיחה, המחיר סביר." : "גם ביחס לקצב הצמיחה, המחיר גבוה.")}</Note>}
+      {peerM?.length>0 && <p className="ex" style={{margin:0}}>מתחרות להשוואה: {peerM.map(x => nameOf(x.s)).join(", ")}</p>}
+    </>;
+  }
+  return <Section n={5} title="שווי החברה והתמחור" ask="האם מחיר המניה הגיוני ביחס לרווחים, לצמיחה ולמתחרות" verdict={verdict}>{body}</Section>;
+}
+
+/* 6 — competitive advantage */
+function S6Moat({ sym, metric, peerM }){
+  const D = DEEP[sym];
+  if (!D && !metric) return null;
+  const gm5 = metric?.grossMargin5Y ?? metric?.grossMarginTTM, roi = metric?.roi5Y ?? metric?.roiTTM;
+  const pGM = median((peerM||[]).map(x => x.m.grossMargin5Y ?? x.m.grossMarginTTM));
+  const signals = [];
+  if (gm5!=null) signals.push(gm5>=50 ? `רווח גולמי גבוה לאורך זמן ($${gm5.toFixed(0)} מכל $100) — סימן שהחברה יכולה לגבות מחיר גבוה ממה שזה עולה לה` : gm5>=30 ? `רווח גולמי בינוני ($${gm5.toFixed(0)} מכל $100)` : `רווח גולמי נמוך ($${gm5.toFixed(0)} מכל $100) — לרוב שוק תחרותי עם מלחמת מחירים`);
+  if (gm5!=null && pGM) signals.push(gm5 > pGM*1.15 ? `הרווח הגולמי גבוה מהמתחרות (אצלן $${pGM.toFixed(0)}) — סימן ליתרון` : gm5 < pGM*0.85 ? `הרווח הגולמי נמוך מהמתחרות (אצלן $${pGM.toFixed(0)})` : `רווח גולמי דומה למתחרות`);
+  if (roi!=null) signals.push(roi>=15 ? `תשואה גבוהה על ההשקעות (${roi.toFixed(0)}% בשנה) — החברה מרוויחה הרבה מכל שקל שהיא משקיעה` : `תשואה על ההשקעות: ${roi.toFixed(0)}% בשנה`);
+  const verdict = gm5==null ? null : gm5>=50 && (!pGM || gm5>=pGM) ? ["g","יש סימנים ברורים ליתרון תחרותי"] : gm5>=30 ? ["y","יתרון תחרותי חלקי"] : ["r","אין סימנים ברורים ליתרון תחרותי במספרים"];
+  return (
+    <Section n={6} title="יתרון תחרותי" ask="מה מבדיל את החברה מהמתחרות: מותג, טכנולוגיה, לקוחות נאמנים, אפקט רשת או עלויות" verdict={verdict}>
+      {D && <div><div style={{fontWeight:800,fontSize:14,color:"var(--fg)",marginBottom:6}}>🛡️ היתרונות של החברה</div><Bullets items={D.moat} icon="✓" /></div>}
+      {signals.length>0 && <div><div style={{fontWeight:800,fontSize:14,color:"var(--fg)",marginBottom:6}}>📊 מה המספרים אומרים</div><Bullets items={signals}/></div>}
+      {!D && <Note>תיאור מילולי של היתרונות כתוב כרגע רק לחברות הגדולות. המספרים למעלה הם רמז טוב: חברות עם יתרון אמיתי שומרות על רווח גולמי גבוה במשך שנים.</Note>}
+    </Section>
+  );
+}
+
+/* 7 — management and insiders */
+function S7Management({ sym, earn, insider }){
+  const D = DEEP[sym];
+  if (earn === null && insider === null && !D) return null;
+  const q = (earn||[]).filter(e => e.actual!=null && e.estimate!=null).slice(0,4);
+  const beats = q.filter(e => e.actual >= e.estimate).length;
+  const tx = (insider||[]).filter(t => !t.isDerivative && (t.transactionCode==="P" || t.transactionCode==="S") && t.change && t.transactionPrice);
+  const buys = tx.filter(t => t.transactionCode==="P"), sells = tx.filter(t => t.transactionCode==="S");
+  const val = a => a.reduce((s,t) => s + Math.abs(t.change*t.transactionPrice), 0);
+  const fmtM = v => v>=1e9 ? `$${(v/1e9).toFixed(1)}B` : v>=1e6 ? `$${(v/1e6).toFixed(1)}M` : `$${Math.round(v/1e3)}K`;
+  const verdict = !q.length ? null : beats>=3 ? ["g", `ההנהלה עמדה בציפיות ב-${beats} מתוך ${q.length} הרבעונים האחרונים`] : beats===2 ? ["y","ההנהלה עמדה בציפיות רק בחצי מהרבעונים"] : ["r",`ההנהלה פספסה את הציפיות ב-${q.length-beats} מתוך ${q.length} רבעונים`];
+  const big = [...tx].sort((a,b) => Math.abs(b.change*b.transactionPrice) - Math.abs(a.change*a.transactionPrice)).slice(0,3);
+  return (
+    <Section n={7} title="הנהלה ובעלי עניין" ask="מי מנהל את החברה, האם ההנהלה עומדת בציפיות והאם המנהלים קונים או מוכרים מניות" verdict={verdict}>
+      {D?.ceo && <Line2 l="מנכ״ל" v={D.ceo}/>}
+      {earn===undefined ? <Sk h={100}/> : q.length>0 && <EarningsCard earn={earn} bare/>}
+      <div>
+        <div style={{fontWeight:800,fontSize:14,color:"var(--fg)",marginBottom:6}}>🕴️ קניות ומכירות של מנהלים (חצי שנה)</div>
+        {insider===undefined ? <Sk h={40}/> : !tx.length ? <p style={{fontSize:13,color:"var(--muted)"}}>לא היו קניות או מכירות של מנהלים בחצי השנה האחרונה.</p> : <>
+          <Line2 l={`קניות (${buys.length})`} v={buys.length?fmtM(val(buys)):"אין"} color={buys.length?"#16a34a":undefined}/>
+          <Line2 l={`מכירות (${sells.length})`} v={sells.length?fmtM(val(sells)):"אין"} color={sells.length?"#dc2626":undefined}/>
+          <div style={{marginTop:6}}>{big.map(t => <p key={t.id} style={{fontSize:12,color:"var(--muted)",lineHeight:1.6}}>
+            {t.transactionCode==="P"?"🟢 קנה":"🔴 מכר"} · <span dir="ltr">{t.name}</span> · {fmtM(Math.abs(t.change*t.transactionPrice))} · {t.transactionDate}</p>)}</div>
+        </>}
+      </div>
+      <Note>{buys.length && val(buys) > val(sells) ? "✅ מנהלים קנו מניות בכסף שלהם — בדרך כלל סימן שהם מאמינים בחברה." :
+        "💡 מכירות של מנהלים נפוצות מאוד (הם מקבלים מניות כחלק מהשכר) ולא תמיד סימן רע. קניות הן סימן חזק יותר."}</Note>
+      <p className="ex" style={{margin:0}}>אחוז המניות שבידי המנהלים לא זמין במקור הנתונים החינמי.</p>
+    </Section>
+  );
+}
+
+/* 8 — expectations and risks */
+function S8Outlook({ sym, rec, metric, fin }){
+  const D = DEEP[sym];
+  const r = rec?.[0];
+  const tot = r ? r.buy+r.strongBuy+r.hold+r.sell+r.strongSell : 0;
+  const buyPct = tot ? (r.buy+r.strongBuy)/tot*100 : null;
+  const pe = metric?.peTTM ?? metric?.peBasicExclExtraTTM, fpe = metric?.forwardPE;
+  const implied = pe>0 && fpe>0 ? (pe/fpe-1)*100 : null;
+  const auto = [];
+  if (pe>40) auto.push("מחיר גבוה ביחס לרווח — אכזבה קטנה בדוחות עלולה להפיל את המניה חזק");
+  const de = metric?.["totalDebt/totalEquityQuarterly"];
+  if (de>1.5) auto.push("הרבה חובות — ריבית גבוהה או ירידה במכירות יכבידו על החברה");
+  if (metric?.revenueGrowthTTMYoy<0) auto.push("ההכנסות ירדו בשנה האחרונה");
+  if (metric?.beta>1.4) auto.push("מניה תנודתית — יכולה לרדת חזק בירידות בשוק");
+  const lastFcf = fin?.[fin.length-1]?.fcf;
+  if (lastFcf!=null && lastFcf<0) auto.push("החברה שורפת מזומן ועלולה להצטרך לגייס כסף או ללוות");
+  if (metric && metric.netProfitMarginTTM<0) auto.push("החברה עדיין מפסידה כסף");
+  const risks = [...(D?.risks||[]), ...auto.filter(a => !(D?.risks||[]).some(x => x.slice(0,10)===a.slice(0,10)))];
+  const verdict = buyPct==null ? null : buyPct>=60 ? ["g",`רוב האנליסטים אופטימיים: ${buyPct.toFixed(0)}% ממליצים לקנות`] : buyPct>=40 ? ["y",`האנליסטים חלוקים: ${buyPct.toFixed(0)}% ממליצים לקנות`] : ["r",`רוב האנליסטים לא ממליצים לקנות (רק ${buyPct.toFixed(0)}%)`];
+  return (
+    <Section n={8} title="תחזיות, ציפיות וסיכונים" ask="מה האנליסטים צופים, מה כבר מגולם במחיר, ומה יכול להשתבש" verdict={verdict}>
+      {rec===undefined ? <Sk h={120}/> : rec?.length>1 && <AnalystTrendCard rec={rec} bare/>}
+      {implied!=null && <Note>📌 <b>מה מגולם במחיר:</b> {implied>0 ? `האנליסטים צופים שהרווח יגדל בכ-${implied.toFixed(0)}% בשנה הבאה, והמחיר הנוכחי כבר מניח שזה יקרה.` : "האנליסטים לא צופים גידול ברווח בשנה הבאה."} אם החברה תצמח פחות מזה, המניה עלולה לרדת גם אם התוצאות "טובות".</Note>}
+      {risks.length>0 && <div>
+        <div style={{fontWeight:800,fontSize:14,color:"var(--fg)",marginBottom:6}}>⚠️ סיכונים מרכזיים</div>
+        <Bullets items={risks} icon="•" color="var(--fg2)"/>
+      </div>}
+      <p className="ex" style={{margin:0}}>מחיר יעד ותחזיות מספריות של אנליסטים זמינים רק בתוכנית בתשלום של מקור הנתונים.</p>
+    </Section>
   );
 }
 
@@ -991,18 +1337,19 @@ const Legend2 = ({ items }) => (
 );
 const qLabel = (period) => { const d = new Date(period); return `Q${Math.floor(d.getUTCMonth()/3)+1} ${String(d.getUTCFullYear()).slice(2)}`; };
 
+const ChartBox = ({ bare, small, title, sub, children }) => bare
+  ? <div><div style={{fontWeight:800,fontSize:14,color:"var(--fg)",marginBottom:2}}>{small}</div><div>{children}</div></div>
+  : <div className="fu"><div className="hd">{title}</div><p className="ex">{sub}</p><div className="card" style={{padding:"18px 12px 14px"}}>{children}</div></div>;
+
 /* Earnings: actual vs expected, last 4 quarters */
-function EarningsCard({ earn }){
+function EarningsCard({ earn, bare }){
   if (earn === null) return null;
   const rows = (earn||[]).filter(e => e.actual!=null && e.estimate!=null).slice(0,4).reverse()
     .map(e => ({ label:qLabel(e.period), est:e.estimate, act:e.actual, beat:e.actual>=e.estimate }));
   if (earn && !rows.length) return null;
   const beats = rows.filter(r=>r.beat).length;
   return (
-    <div className="fu">
-      <div className="hd">🎯 האם החברה עמדה בציפיות?</div>
-      <p className="ex">רווח למניה בכל רבעון: מה האנליסטים ציפו מול מה שהחברה הרוויחה בפועל.</p>
-      <div className="card" style={{padding:"18px 12px 14px"}}>
+    <ChartBox bare={bare} small="🎯 רווח בפועל מול ציפיות (4 רבעונים)" title="🎯 האם החברה עמדה בציפיות?" sub="רווח למניה בכל רבעון: מה האנליסטים ציפו מול מה שהחברה הרוויחה בפועל.">
         {!earn ? <Sk h={160}/> : <>
           <div style={{fontSize:15,fontWeight:800,color:beats>=3?"#16a34a":beats<=1?"#dc2626":"#ca8a04",textAlign:"center",marginBottom:10}}>
             {beats===rows.length ? `עברה את הציפיות בכל ${rows.length} הרבעונים האחרונים` : `עברה את הציפיות ב-${beats} מתוך ${rows.length} רבעונים`}
@@ -1020,8 +1367,7 @@ function EarningsCard({ earn }){
           </ResponsiveContainer>
           <Legend2 items={[["#d1d5db","צפי האנליסטים"],["#22c55e","בפועל (עברה)"],["#ef4444","בפועל (פספסה)"]]}/>
         </>}
-      </div>
-    </div>
+    </ChartBox>
   );
 }
 
@@ -1066,7 +1412,7 @@ function MarginCard({ metric }){
 }
 
 /* Analyst opinions month by month */
-function AnalystTrendCard({ rec }){
+function AnalystTrendCard({ rec, bare }){
   if (rec === null) return null;
   const rows = (rec||[]).slice(0,6).reverse().map(r => {
     const d = new Date(r.period);
@@ -1077,10 +1423,7 @@ function AnalystTrendCard({ rec }){
   const a = rows[0] && pct(rows[0]), b = rows.length && pct(rows[rows.length-1]);
   const trend = b - a;
   return (
-    <div className="fu">
-      <div className="hd">📅 איך דעת האנליסטים השתנתה?</div>
-      <p className="ex">כמה אנליסטים המליצו לקנות, להחזיק או למכור בכל חודש.</p>
-      <div className="card" style={{padding:"18px 12px 14px"}}>
+    <ChartBox bare={bare} small="📅 המלצות האנליסטים בכל חודש" title="📅 איך דעת האנליסטים השתנתה?" sub="כמה אנליסטים המליצו לקנות, להחזיק או למכור בכל חודש.">
         {!rec ? <Sk h={160}/> : <>
           <p style={{fontSize:14,textAlign:"center",fontWeight:800,marginBottom:8,color:trend>3?"#16a34a":trend<-3?"#dc2626":"#6b7280"}}>
             {trend>3 ? `יותר אנליסטים ממליצים לקנות (${a}% ← ${b}%)` : trend<-3 ? `פחות אנליסטים ממליצים לקנות (${a}% ← ${b}%)` : `הדעות כמעט לא השתנו (${b}% ממליצים לקנות)`}
@@ -1097,8 +1440,7 @@ function AnalystTrendCard({ rec }){
           </ResponsiveContainer>
           <Legend2 items={[["#22c55e","קנייה"],["#f59e0b","החזקה"],["#ef4444","מכירה"]]}/>
         </>}
-      </div>
-    </div>
+    </ChartBox>
   );
 }
 
