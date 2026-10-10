@@ -57,6 +57,14 @@ def main():
         except Exception as e:
             failed.append(f"{sym}: {e}")
         time.sleep(0.4)
+    # USD → ILS exchange rate for the shekel view
+    try:
+        fx = get_json("https://api.frankfurter.app/latest?from=USD&to=ILS")
+        with open(os.path.join(OUT, "fx.json"), "w") as f:
+            json.dump({"ILS": fx["rates"]["ILS"], "date": fx.get("date")}, f)
+        print("fx", fx["rates"]["ILS"])
+    except Exception as e:
+        print("FAILED fx:", e)
     print(f"saved {ok}/{len(SYMBOLS)}")
     for line in failed:
         print("FAILED", line)
