@@ -6,6 +6,7 @@ on:
   push:
     paths:
       - src/**
+      - test/**
       - .github/workflows/build.yml
   workflow_dispatch:
 
@@ -24,6 +25,11 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: "20"
+      - name: Test with real data
+        run: |
+          npm init -y >/dev/null
+          npm install --no-audit --no-fund react@18.3.1 react-dom@18.3.1 prop-types@15.8.1 recharts@2.12.7 >/dev/null
+          node test/smoke.mjs
       - name: Compile
         run: |
           npx --yes esbuild@0.24.0 src/app.jsx --loader:.jsx=jsx \
