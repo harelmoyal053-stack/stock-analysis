@@ -15,7 +15,7 @@ BOT_INFO = os.path.join(ROOT, "data", "bot.json")
 TOKEN = os.environ.get("TELEGRAM_TOKEN", "").strip()
 # Same free Finnhub key the site uses (stored reversed there too).
 FH = "golsome8mq10rppdo4bd0olsome8mq10rppdo4bd"[::-1]
-FH_KEYS = [FH[:20], FH[20:]]
+FH_KEYS = [FH]
 
 HE = {"AAPL": "אפל", "NVDA": "אנבידיה", "TSLA": "טסלה", "MSFT": "מיקרוסופט", "GOOGL": "גוגל",
       "AMZN": "אמזון", "META": "מטא", "NFLX": "נטפליקס", "TEVA": "טבע", "CHKP": "צ'ק פוינט"}

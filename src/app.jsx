@@ -313,9 +313,6 @@ function buildSummary({ fin, rec, metric, quote }){
     if (pos > 85) pts.push({i:"🔝",t:"המניה קרובה לשיא של השנה האחרונה."});
     else if (pos < 15) pts.push({i:"🔻",t:"המניה קרובה לשפל של השנה האחרונה."});
   }
-  const pe = metric?.peTTM ?? metric?.peBasicExclExtraTTM;
-  if (pe > 40) pts.push({i:"💸",t:`המניה יקרה ביחס לרווחים שלה (מכפיל ${pe.toFixed(0)}) — השוק מצפה לצמיחה.`});
-  else if (pe > 0 && pe < 15) pts.push({i:"🏷️",t:`המניה זולה יחסית לרווחים שלה (מכפיל ${pe.toFixed(0)}).`});
   return { pts, growing, profitable };
 }
 
@@ -452,7 +449,7 @@ const DEFAULT_FH = "golsome8mq10rppdo4bd0olsome8mq10rppdo4bd".split("").reverse(
 function candidates(raw){
   const k = (raw||"").replace(/\s+/g,"");
   if (!k) return [];
-  return k.length === 40 ? [k.slice(0,20), k.slice(20), k] : [k];
+  return k.length === 40 ? [k, k.slice(0,20), k.slice(20)] : [k];
 }
 async function findWorkingKey(list){
   for (const k of list) {
@@ -734,12 +731,11 @@ function StockPage({ sym, keys, onBack, onSettings, go, view }){
           <p style={{fontSize:14,color:"var(--muted)",lineHeight:1.6,marginTop:14}}>
             {HE[sym]?.d || (profile ? `${profile.name} פועלת בתחום ${indOf(profile) || "—"}.` : <Sk h={14}/>)}
           </p>
-          <div style={{display:"grid",gridTemplateColumns:"repeat(3,1fr)",gap:8,marginTop:14}}>
-            <div className="stat"><div className="l">שווי שוק</div><div className="v">{profile===undefined ? <Sk h={14} mt={4}/> : cap(profile?.marketCapitalization)}</div></div>
-            <div className="stat"><div className="l">מכפיל רווח</div><div className="v">{metric===undefined ? <Sk h={14} mt={4}/> : pe ? pe.toFixed(1) : "—"}</div></div>
-            <div className="stat"><div className="l">דיבידנד</div><div className="v">{metric===undefined ? <Sk h={14} mt={4}/> : div ? `${div.toFixed(2)}%` : "אין"}</div></div>
+          <div style={{display:"grid",gridTemplateColumns:"repeat(2,1fr)",gap:8,marginTop:14}}>
+            <div className="stat"><div className="l">שווי החברה</div><div className="v">{profile===undefined ? <Sk h={14} mt={4}/> : cap(profile?.marketCapitalization)}</div></div>
+            <div className="stat"><div className="l">דיבידנד בשנה</div><div className="v">{metric===undefined ? <Sk h={14} mt={4}/> : div ? `${div.toFixed(2)}%` : "לא משלמת"}</div></div>
           </div>
-          <p className="ex" style={{marginTop:10,marginBottom:0}}>שווי שוק = כמה שווה כל החברה. מכפיל רווח = כמה שנות רווח משלמים על המניה.</p>
+          <p className="ex" style={{marginTop:10,marginBottom:0}}>שווי החברה = כמה עולות כל המניות שלה ביחד. דיבידנד = כמה מהמחיר החברה מחלקת לבעלי המניות כל שנה.</p>
           <button className="btn2" style={{width:"100%",marginTop:12,padding:11}} onClick={()=>{
             const cur = saved.read("cmp", ["AAPL","MSFT"]); const other = cur.find(x => x!==sym) || "MSFT";
             saved.write("cmp", [sym, other===sym ? "AAPL" : other]); go("compare");
@@ -787,6 +783,9 @@ function StockPage({ sym, keys, onBack, onSettings, go, view }){
             <RangeBar lo={lo} hi={hi} cur={quote.c} loLabel="שפל שנתי" hiLabel="שיא שנתי"/>
           </div>}
         </div>
+
+        {/* ── Investor checklist ── */}
+        <HealthCheck metric={metric}/>
 
         {/* ── Smart summary ── */}
         <div className="fu">
@@ -872,6 +871,104 @@ function StockPage({ sym, keys, onBack, onSettings, go, view }){
         <p style={{textAlign:"center",fontSize:11,color:"#c0c8d4"}}>מקור: Finnhub{keys.td ? " · Twelve Data" : ""} · לא המלצת השקעה</p>
       </div>
       <BottomNav view={view} go={v=>{ onBack(); go(v); }} onSettings={onSettings}/>
+    </div>
+  );
+}
+
+/* ══════════════════════════════════════
+   INVESTOR CHECKLIST — the numbers people usually check before buying a stock
+   Thresholds are rough rules of thumb; they differ between industries.
+══════════════════════════════════════ */
+const n1 = v => Math.abs(v) >= 100 ? v.toFixed(0) : Math.abs(v) >= 10 ? v.toFixed(0) : v.toFixed(1);
+function checks(m){
+  const out = [];
+  const add = (o) => out.push(o);
+  const rg = m.revenueGrowthTTMYoy, rg5 = m.revenueGrowth5Y;
+  if (rg != null) add({ k:"growth", q:"האם החברה גדלה?", light: rg>=10?"g":rg>=0?"y":"r", val:`${rg>=0?"+":""}${n1(rg)}%`,
+    t: rg>=0 ? `ההכנסות גדלו ב-${n1(rg)}% בשנה האחרונה${rg5!=null?`, ובממוצע ${n1(rg5)}% בשנה ב-5 השנים האחרונות`:""}.` : `ההכנסות ירדו ב-${n1(-rg)}% בשנה האחרונה.`,
+    why:"חברה שמוכרת יותר כל שנה בדרך כלל שווה יותר עם הזמן." });
+  const nm = m.netProfitMarginTTM;
+  if (nm != null) add({ k:"profit", q:"האם היא מרוויחה?", light: nm>=15?"g":nm>=5?"y":"r", val: nm<0?"הפסד":`$${n1(nm)} מ-$100`,
+    t: nm>=0 ? `מכל $100 שהחברה מוכרת, נשארים לה $${n1(nm)} רווח נקי.` : `החברה מפסידה: על כל $100 מכירות היא מפסידה $${n1(-nm)}.`,
+    why:"חברה רווחית לא צריכה ללוות או לגייס כסף כדי לשרוד." });
+  const eg = m.epsGrowthTTMYoy;
+  if (eg != null) add({ k:"eps", q:"האם הרווח גדל?", light: eg>=10?"g":eg>=0?"y":"r", val:`${eg>=0?"+":""}${n1(eg)}%`,
+    t: eg>=0 ? `הרווח על כל מניה גדל ב-${n1(eg)}% בשנה האחרונה.` : `הרווח על כל מניה ירד ב-${n1(-eg)}% בשנה האחרונה.`,
+    why:"לאורך זמן, מחיר מניה נוטה לזוז יחד עם הרווח שלה." });
+  const pe = m.peTTM ?? m.peBasicExclExtraTTM, peg = m.pegTTM;
+  if (pe != null) {
+    const light = pe<=0 ? "r" : pe<20 ? "g" : pe<=35 ? "y" : (peg>0 && peg<1.5 ? "y" : "r");
+    add({ k:"price", q:"האם המחיר סביר?", light, val: pe<=0 ? "אין רווח" : `מכפיל ${n1(pe)}`,
+      t: pe<=0 ? "אין לחברה רווח, אז אי אפשר לבדוק אם המחיר סביר ביחס לרווחים." :
+        `קונים את המניה במחיר של ${n1(pe)} שנות רווח. ${pe<20?"זה זול יחסית.":pe<=35?"זה מחיר בינוני-גבוה.":light==="y"?"יקר, אבל הרווח גדל מהר.":"זה יקר, והשוק מצפה לצמיחה גדולה."}`,
+      why:"גם חברה מעולה יכולה להיות השקעה גרועה אם משלמים עליה יותר מדי." });
+  }
+  const de = m["totalDebt/totalEquityQuarterly"] ?? m["totalDebt/totalEquityAnnual"];
+  if (de != null) add({ k:"debt", q:"כמה חובות יש לה?", light: de<0?"r":de<0.5?"g":de<=1.5?"y":"r", val: de<0?"גבוה מאוד":`$${de.toFixed(2)} חוב ל-$1`,
+    t: de<0 ? "לחברה יש יותר חובות מנכסים." : `על כל $1 שבבעלות בעלי המניות, יש לחברה $${de.toFixed(2)} חוב. ${de<0.5?"מעט חובות.":de<=1.5?"כמות חוב סבירה.":"הרבה חובות."}`,
+    why:"חוב גדול הופך את החברה לפגיעה כשהריבית עולה או כשהמכירות יורדות." });
+  const cr = m.currentRatioQuarterly ?? m.currentRatioAnnual;
+  if (cr != null) add({ k:"cash", q:"יש לה כסף לשלם חשבונות?", light: cr>=1.5?"g":cr>=1?"y":"r", val:`${cr.toFixed(2)}`,
+    t: `על כל $1 שהחברה צריכה לשלם בשנה הקרובה, יש לה $${cr.toFixed(2)} בכסף ובנכסים שקל למכור. ${cr>=1.5?"מצב נוח.":cr>=1?"מספיק, בקושי.":"פחות ממה שהיא צריכה."}`,
+    why:"חברה בלי מספיק כסף זמין עלולה להצטרך הלוואה או גיוס בתנאים גרועים." });
+  const roe = m.roeTTM;
+  if (roe != null) add({ k:"roe", q:"היא יודעת להרוויח מהכסף?", light: roe>=15?"g":roe>=5?"y":"r", val:`${n1(roe)}%`,
+    t: roe>=0 ? `על כל $100 של בעלי המניות, החברה מרוויחה $${n1(roe)} בשנה.` : "החברה מפסידה את הכסף של בעלי המניות.",
+    why:"זה מראה כמה טוב ההנהלה משתמשת בכסף שיש לה." });
+  const vs = m["priceRelativeToS&P50052Week"];
+  if (vs != null) add({ k:"market", q:"ביצעה טוב יותר מהשוק?", light: vs>=0?"g":vs>=-10?"y":"r", val:`${vs>=0?"+":""}${n1(vs)}%`,
+    t: vs>=0 ? `בשנה האחרונה המניה עלתה ${n1(vs)}% יותר ממדד S&P 500.` : `בשנה האחרונה המניה הייתה חלשה מהשוק ב-${n1(-vs)}%.`,
+    why:"אם מניה מפגרת אחרי השוק, היה עדיף פשוט לקנות קרן מחקה מדד." });
+  const b = m.beta;
+  if (b != null) add({ k:"beta", q:"כמה היא קופצנית?", light: b<0.8?"g":b<=1.3?"y":"r", val: b<0.8?"רגועה":b<=1.3?"כמו השוק":"קופצנית",
+    t: `כשהשוק זז 10%, המניה הזו זזה בערך ${n1(Math.abs(b)*10)}%. ${b<0.8?"תנודות קטנות.":b<=1.3?"תנודות רגילות.":"עליות וירידות חדות, יותר סיכון."}`,
+    why:"מניה קופצנית יכולה לרדת חזק דווקא כשצריך את הכסף." });
+  return out;
+}
+
+const LIGHT = { g:["🟢","#16a34a"], y:["🟡","#ca8a04"], r:["🔴","#dc2626"] };
+function HealthCheck({ metric }){
+  const [openK, setOpenK] = useState(null);
+  if (metric === null) return null;
+  const list = metric ? checks(metric) : [];
+  if (metric && !list.length) return null;
+  const g = list.filter(c=>c.light==="g").length, r = list.filter(c=>c.light==="r").length;
+  const verdict = !list.length ? null : g/list.length >= .7 ? ["החברה נראית חזקה ברוב הבדיקות","#16a34a"]
+    : r/list.length >= .4 ? ["יש כמה נורות אדומות — כדאי לבדוק לעומק","#dc2626"] : ["תמונה מעורבת: יש נקודות חזקות וחלשות","#ca8a04"];
+  return (
+    <div className="fu">
+      <div className="hd">🩺 בדיקה לפני השקעה</div>
+      <p className="ex">הנתונים שמשקיעים בודקים בדרך כלל לפני שקונים מניה. לחץ על שורה כדי להבין למה זה חשוב.</p>
+      <div className="card" style={{padding:"16px 16px 6px"}}>
+        {!metric ? [1,2,3,4].map(i => <div key={i} style={{padding:"10px 0"}}><Sk h={14}/><Sk h={11} w="70%" mt={6}/></div>) : <>
+          <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",gap:10,paddingBottom:12,borderBottom:"1px solid var(--soft)"}}>
+            <div>
+              <div style={{fontWeight:900,fontSize:16,color:verdict[1]}}>{verdict[0]}</div>
+              <div style={{fontSize:12,color:"var(--muted)",marginTop:2}}>{g} ירוקות מתוך {list.length} בדיקות</div>
+            </div>
+            <div style={{display:"flex",gap:3,flexWrap:"wrap",justifyContent:"flex-end",maxWidth:120}}>
+              {list.map(c => <span key={c.k} style={{width:10,height:10,borderRadius:99,background:LIGHT[c.light][1]}}/>)}
+            </div>
+          </div>
+          {list.map((c,i) => (
+            <div key={c.k} className="tap" onClick={()=>setOpenK(openK===c.k?null:c.k)}
+              style={{padding:"12px 0",borderTop:i?"1px solid var(--soft)":"none"}}>
+              <div style={{display:"flex",alignItems:"flex-start",gap:10}}>
+                <span style={{fontSize:14,lineHeight:"22px"}}>{LIGHT[c.light][0]}</span>
+                <div style={{flex:1,minWidth:0}}>
+                  <div style={{display:"flex",justifyContent:"space-between",gap:8,alignItems:"baseline"}}>
+                    <span style={{fontWeight:800,fontSize:14,color:"var(--fg)"}}>{c.q}</span>
+                    <span style={{fontWeight:800,fontSize:13,color:LIGHT[c.light][1],whiteSpace:"nowrap"}}>{c.val}</span>
+                  </div>
+                  <p style={{fontSize:13,color:"var(--muted)",lineHeight:1.5,marginTop:3}}>{c.t}</p>
+                  {openK===c.k && <p style={{fontSize:12,color:"var(--fg2)",background:"var(--soft2)",borderRadius:10,padding:"8px 10px",marginTop:8,lineHeight:1.5}}>💡 למה זה חשוב: {c.why}</p>}
+                </div>
+              </div>
+            </div>
+          ))}
+        </>}
+      </div>
+      <p className="ex" style={{marginTop:8}}>הצבעים הם כללי אצבע כלליים. מה שנחשב "טוב" משתנה בין תעשיות (למשל, לבנקים יש תמיד הרבה חוב). זו לא המלצת השקעה.</p>
     </div>
   );
 }
