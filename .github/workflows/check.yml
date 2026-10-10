@@ -1,0 +1,22 @@
+name: Check site code
+
+on:
+  push:
+    paths:
+      - index.html
+      - scripts/check-syntax.mjs
+  workflow_dispatch:
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+      - name: Compile app code
+        run: |
+          node scripts/check-syntax.mjs
+          npx --yes esbuild@0.24.0 /tmp/app.jsx --loader:.jsx=jsx --bundle=false --outfile=/tmp/out.js --log-level=warning
+          echo "SYNTAX OK"

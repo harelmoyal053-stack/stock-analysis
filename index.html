@@ -288,14 +288,84 @@ function LivePrice({ value, size=17 }){
 
 const Pct = ({ v }) => v==null ? null : <span className={v>=0?"gb":"rbd"}>{v>=0?"▲":"▼"} {Math.abs(v).toFixed(2)}%</span>;
 
-function BottomNav({ onHome, onSettings }){
+/* ══════════════════════════════════════
+   SAVED LISTS (watchlist + portfolio) — kept in this browser, synced across screens
+══════════════════════════════════════ */
+const saved = {
+  read(k, def){ try { const v = store.get(k); return v ? JSON.parse(v) : def; } catch { return def; } },
+  write(k, v){ store.set(k, JSON.stringify(v)); window.dispatchEvent(new CustomEvent("saved:"+k, { detail:v })); },
+};
+function useSaved(k, def){
+  const [v, setV] = useState(() => saved.read(k, def));
+  useEffect(() => {
+    const on = e => setV(e.detail);
+    window.addEventListener("saved:"+k, on);
+    return () => window.removeEventListener("saved:"+k, on);
+  }, [k]);
+  return [v, nv => saved.write(k, typeof nv === "function" ? nv(saved.read(k, def)) : nv)];
+}
+const useWatch = () => useSaved("watch", POPULAR);
+const useHoldings = () => useSaved("holdings", []);
+
+function BottomNav({ view, go, onSettings }){
   return (
     <div className="bnav">
-      <div className="ni on" onClick={onHome}>🏠<span>בית</span></div>
-      <div className="ni" onClick={onHome}>🔍<span>חיפוש</span></div>
+      <div className={`ni ${view==="home"?"on":""}`} onClick={()=>go("home")}>⭐<span>המניות שלי</span></div>
+      <div className={`ni ${view==="portfolio"?"on":""}`} onClick={()=>go("portfolio")}>💼<span>התיק שלי</span></div>
       <div className="ni" onClick={onSettings}>⚙️<span>הגדרות</span></div>
     </div>
   );
+}
+
+/* Small 1-month trend line for list rows (only for stocks with saved history) */
+function MiniSpark({ sym }){
+  const [pts, setPts] = useState(null);
+  useEffect(() => {
+    let alive = true;
+    repoHistory(sym).then(h => alive && setPts((h.d||[]).slice(-22).map(([,p]) => ({ p })))).catch(() => alive && setPts([]));
+    return () => { alive = false; };
+  }, [sym]);
+  if (!pts || pts.length < 2) return <div style={{width:64}}/>;
+  const up = pts[pts.length-1].p >= pts[0].p, c = up ? "#22c55e" : "#ef4444";
+  return (
+    <div style={{width:64,height:30,flexShrink:0}} title="מגמה בחודש האחרון">
+      <ResponsiveContainer width="100%" height="100%">
+        <AreaChart data={pts} margin={{top:2,right:0,bottom:2,left:0}}>
+          <defs><linearGradient id={`sp-${sym}`} x1="0" y1="0" x2="0" y2="1">
+            <stop offset="0%" stopColor={c} stopOpacity={.25}/><stop offset="100%" stopColor={c} stopOpacity={0}/>
+          </linearGradient></defs>
+          <YAxis hide domain={["dataMin","dataMax"]}/>
+          <Area type="monotone" dataKey="p" stroke={c} strokeWidth={1.8} fill={`url(#sp-${sym})`} dot={false} isAnimationActive={false}/>
+        </AreaChart>
+      </ResponsiveContainer>
+    </div>
+  );
+}
+
+/* Live quotes + profiles for a list of symbols (polls every 30s to stay inside the free limit) */
+function useQuotes(syms, keyFH){
+  const [quotes, setQuotes] = useState({});
+  const [profiles, setProfiles] = useState({});
+  const [err, setErr] = useState(null);
+  const [updated, setUpdated] = useState(null);
+  const keyList = syms.join(",");
+  useEffect(() => {
+    let alive = true;
+    const list = keyList ? keyList.split(",") : [];
+    list.forEach(s => api.profile(s,keyFH).then(p => alive && setProfiles(x=>({...x,[s]:p}))).catch(()=>{}));
+    async function tick(){
+      if (!list.length) return;
+      const res = await Promise.allSettled(list.map(s => api.quote(s,keyFH)));
+      if (!alive) return;
+      const next = {}; let firstErr = null;
+      res.forEach((r,i) => r.status==="fulfilled" ? next[list[i]] = r.value : firstErr = firstErr || r.reason);
+      setQuotes(x=>({...x,...next})); setErr(Object.keys(next).length ? null : firstErr);
+      setUpdated(new Date().toLocaleTimeString("he-IL",{hour:"2-digit",minute:"2-digit",second:"2-digit"}));
+    }
+    tick(); const id = setInterval(tick, 30000);
+    return () => { alive = false; clearInterval(id); };
+  }, [keyList, keyFH]);
+  return { quotes, profiles, err, updated };
 }
 
 /* ══════════════════════════════════════
@@ -363,30 +433,13 @@ function SetupScreen({ keys, onSave }){
 /* ══════════════════════════════════════
    HOME
 ══════════════════════════════════════ */
-function HomePage({ keyFH, onSelect, onSettings }){
-  const [quotes, setQuotes] = useState({});
-  const [profiles, setProfiles] = useState({});
-  const [err, setErr] = useState(null);
-  const [updated, setUpdated] = useState(null);
+function HomePage({ keyFH, onSelect, onSettings, go }){
+  const [watch, setWatch] = useWatch();
+  const { quotes, profiles, err, updated } = useQuotes(watch, keyFH);
   const [q, setQ] = useState("");
   const [results, setResults] = useState([]);
   const [searching, setSearching] = useState(false);
   const market = marketStatus();
-
-  useEffect(() => {
-    let alive = true;
-    POPULAR.forEach(s => api.profile(s,keyFH).then(p => alive && setProfiles(x=>({...x,[s]:p}))).catch(()=>{}));
-    async function tick(){
-      const res = await Promise.allSettled(POPULAR.map(s => api.quote(s,keyFH)));
-      if (!alive) return;
-      const next = {}; let firstErr = null;
-      res.forEach((r,i) => r.status==="fulfilled" ? next[POPULAR[i]] = r.value : firstErr = firstErr || r.reason);
-      setQuotes(x=>({...x,...next})); setErr(Object.keys(next).length ? null : firstErr);
-      setUpdated(new Date().toLocaleTimeString("he-IL",{hour:"2-digit",minute:"2-digit",second:"2-digit"}));
-    }
-    tick(); const id = setInterval(tick, 15000);
-    return () => { alive = false; clearInterval(id); };
-  }, [keyFH]);
 
   useEffect(() => {
     const term = q.trim();
@@ -445,21 +498,33 @@ function HomePage({ keyFH, onSelect, onSettings }){
           </div>
         )}
 
-        <div style={{fontSize:16,fontWeight:800,color:"#111827",marginBottom:12}}>מניות פופולריות</div>
+        <div style={{display:"flex",justifyContent:"space-between",alignItems:"baseline",marginBottom:12}}>
+          <div style={{fontSize:16,fontWeight:800,color:"#111827"}}>⭐ המניות שלי</div>
+          <div style={{fontSize:12,color:"#9ca3af"}}>הקו הקטן = המגמה בחודש האחרון</div>
+        </div>
+        {watch.length===0 && (
+          <div className="card" style={{padding:"22px 18px",textAlign:"center"}}>
+            <div style={{fontSize:30}}>⭐</div>
+            <div style={{fontWeight:800,fontSize:15,color:"#111827",marginTop:6}}>הרשימה ריקה</div>
+            <p className="ex" style={{marginTop:6,marginBottom:12}}>חפש מניה למעלה, היכנס אליה ולחץ על הכוכב כדי להוסיף אותה לכאן.</p>
+            <button className="btn2" onClick={()=>setWatch(POPULAR)}>הוסף את המניות הפופולריות</button>
+          </div>
+        )}
         <div style={{display:"flex",flexDirection:"column",gap:10}}>
-          {POPULAR.map((s,i) => {
+          {watch.map((s,i) => {
             const qt = quotes[s], p = profiles[s];
             return (
               <div key={s} className="card tap" onClick={()=>onSelect(s)}
                 style={{padding:"14px 16px",display:"flex",alignItems:"center",justifyContent:"space-between",animation:`fadeUp .4s ${i*.05}s both`}}>
-                <div style={{display:"flex",alignItems:"center",gap:12}}>
+                <div style={{display:"flex",alignItems:"center",gap:12,minWidth:0,flex:1}}>
                   <Logo sym={s} url={p?.logo}/>
-                  <div>
-                    <div style={{fontWeight:800,fontSize:15,color:"#111827"}}>{nameOf(s,p)}</div>
-                    <div style={{fontSize:12,color:"#9ca3af"}}>{s}{indOf(p) && ` · ${indOf(p)}`}</div>
+                  <div style={{minWidth:0}}>
+                    <div style={{fontWeight:800,fontSize:15,color:"#111827",whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"}}>{nameOf(s,p)}</div>
+                    <div style={{fontSize:12,color:"#9ca3af"}}>{s}</div>
                   </div>
                 </div>
-                <div style={{textAlign:"left"}}>
+                <MiniSpark sym={s}/>
+                <div style={{textAlign:"left",minWidth:82,marginRight:10}}>
                   {qt?.c ? <><LivePrice value={qt.c}/><div style={{marginTop:3}}><Pct v={qt.dp}/></div></>
                          : <><Sk w={70} h={18}/><Sk w={50} h={14} mt={6}/></>}
                 </div>
@@ -467,9 +532,9 @@ function HomePage({ keyFH, onSelect, onSettings }){
             );
           })}
         </div>
-        <p style={{textAlign:"center",fontSize:11,color:"#c0c8d4",marginTop:22}}>מקור: Finnhub · מתעדכן כל 15 שניות · לא המלצת השקעה</p>
+        <p style={{textAlign:"center",fontSize:11,color:"#c0c8d4",marginTop:22}}>מקור: Finnhub · מתעדכן כל 30 שניות · לא המלצת השקעה</p>
       </div>
-      <BottomNav onHome={()=>{}} onSettings={onSettings}/>
+      <BottomNav view="home" go={go} onSettings={onSettings}/>
     </div>
   );
 }
@@ -477,7 +542,10 @@ function HomePage({ keyFH, onSelect, onSettings }){
 /* ══════════════════════════════════════
    STOCK PAGE
 ══════════════════════════════════════ */
-function StockPage({ sym, keys, onBack, onSettings }){
+function StockPage({ sym, keys, onBack, onSettings, go, view }){
+  const [watch, setWatch] = useWatch();
+  const starred = watch.includes(sym);
+  const toggleStar = () => setWatch(w => w.includes(sym) ? w.filter(x=>x!==sym) : [...w, sym]);
   const [d, setD] = useState({});
   const [err, setErr] = useState(null);
   const [range, setRange] = useState("1M");
@@ -517,7 +585,8 @@ function StockPage({ sym, keys, onBack, onSettings }){
       <div style={{background:"rgba(255,255,255,.95)",backdropFilter:"blur(14px)",padding:"12px 16px",borderBottom:"1px solid rgba(0,0,0,.05)",display:"flex",alignItems:"center",justifyContent:"space-between",position:"sticky",top:0,zIndex:50}}>
         <button onClick={onBack} className="btn2" style={{width:38,height:38,padding:0,fontSize:16}}>→</button>
         <div style={{fontWeight:800,fontSize:16,color:"#111827"}}>{nameOf(sym,profile)}</div>
-        <div style={{fontSize:11,color:"#16a34a",fontWeight:700,width:38,textAlign:"left"}}><span className="pdot">●</span> חי</div>
+        <button onClick={toggleStar} aria-label={starred?"הסר מהמניות שלי":"הוסף למניות שלי"} className="btn2"
+          style={{width:38,height:38,padding:0,fontSize:18,background:starred?"#fef9c3":"#f3f4f6"}}>{starred?"⭐":"☆"}</button>
       </div>
 
       <div style={{padding:"16px",display:"flex",flexDirection:"column",gap:16,maxWidth:640,margin:"0 auto"}}>
@@ -679,7 +748,7 @@ function StockPage({ sym, keys, onBack, onSettings }){
 
         <p style={{textAlign:"center",fontSize:11,color:"#c0c8d4"}}>מקור: Finnhub{keys.td ? " · Twelve Data" : ""} · לא המלצת השקעה</p>
       </div>
-      <BottomNav onHome={onBack} onSettings={onSettings}/>
+      <BottomNav view={view} go={v=>{ onBack(); go(v); }} onSettings={onSettings}/>
     </div>
   );
 }
@@ -860,12 +929,210 @@ function FinCard({ rows, k, label, note, dark }){
 }
 
 /* ══════════════════════════════════════
+   PORTFOLIO — what I own, what it's worth, how much I made
+══════════════════════════════════════ */
+const money = v => `${v<0?"−":""}$${Math.abs(v).toLocaleString("en-US",{minimumFractionDigits:2,maximumFractionDigits:2})}`;
+const signed = v => `${v>=0?"+":"−"}$${Math.abs(v).toLocaleString("en-US",{minimumFractionDigits:2,maximumFractionDigits:2})}`;
+const SLICE = ["#16a34a","#2563eb","#f59e0b","#db2777","#7c3aed","#0891b2","#ea580c","#65a30d"];
+
+function PortfolioPage({ keyFH, onSelect, onSettings, go }){
+  const [holdings, setHoldings] = useHoldings();
+  const syms = [...new Set(holdings.map(h => h.sym))];
+  const { quotes, profiles } = useQuotes(syms, keyFH);
+  const [adding, setAdding] = useState(false);
+  const [confirmDel, setConfirmDel] = useState(null);
+
+  const rows = holdings.map(h => {
+    const q = quotes[h.sym], price = q?.c;
+    const value = price!=null ? price*h.qty : null, cost = h.cost*h.qty;
+    return { ...h, price, value, costTotal:cost, pl: value!=null ? value-cost : null, today: q?.d!=null ? q.d*h.qty : null };
+  });
+  const ready = rows.length && rows.every(r => r.value!=null);
+  const total = rows.reduce((a,r) => a + (r.value||0), 0);
+  const cost  = rows.reduce((a,r) => a + r.costTotal, 0);
+  const pl = total - cost, plPct = cost ? pl/cost*100 : 0;
+  const today = rows.reduce((a,r) => a + (r.today||0), 0);
+  const slices = ready ? rows.map((r,i) => ({ sym:r.sym, v:r.value, c:SLICE[i%SLICE.length] })).sort((a,b)=>b.v-a.v) : [];
+
+  return (
+    <div style={{minHeight:"100vh",paddingBottom:90}}>
+      <div style={{background:"#fff",padding:"14px 20px",borderBottom:"1px solid rgba(0,0,0,.05)",position:"sticky",top:0,zIndex:50}}>
+        <div style={{fontSize:16,fontWeight:800,color:"#111827"}}>💼 התיק שלי</div>
+        <div style={{fontSize:11,color:"#9ca3af"}}>נשמר רק במכשיר הזה</div>
+      </div>
+      <div style={{padding:"18px 16px",maxWidth:640,margin:"0 auto",display:"flex",flexDirection:"column",gap:16}}>
+
+        {holdings.length===0 ? (
+          <div className="card fu" style={{padding:"28px 20px",textAlign:"center"}}>
+            <div style={{fontSize:36}}>💼</div>
+            <div style={{fontWeight:900,fontSize:18,color:"#111827",marginTop:8}}>עוד לא הוספת מניות</div>
+            <p className="ex" style={{marginTop:8}}>הוסף מניה שקנית, כמה יחידות ובאיזה מחיר, ותראה כמה התיק שווה עכשיו וכמה הרווחת.</p>
+          </div>
+        ) : (
+          <div className="fu" style={{background:"#111827",borderRadius:22,padding:"22px 20px",color:"#fff"}}>
+            <div style={{fontSize:13,color:"#9ca3af",fontWeight:600}}>שווי התיק עכשיו</div>
+            {ready ? <>
+              <div style={{fontSize:34,fontWeight:900,letterSpacing:"-1px",marginTop:2}}>{money(total)}</div>
+              <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:10,marginTop:16}}>
+                <div style={{background:"rgba(255,255,255,.07)",borderRadius:14,padding:"12px"}}>
+                  <div style={{fontSize:11,color:"#9ca3af",fontWeight:600}}>רווח / הפסד כולל</div>
+                  <div style={{fontSize:17,fontWeight:800,color:pl>=0?"#4ade80":"#f87171",marginTop:2}}>{signed(pl)}</div>
+                  <div style={{fontSize:12,fontWeight:700,color:pl>=0?"#4ade80":"#f87171"}}>{pl>=0?"▲":"▼"} {Math.abs(plPct).toFixed(1)}%</div>
+                </div>
+                <div style={{background:"rgba(255,255,255,.07)",borderRadius:14,padding:"12px"}}>
+                  <div style={{fontSize:11,color:"#9ca3af",fontWeight:600}}>שינוי היום</div>
+                  <div style={{fontSize:17,fontWeight:800,color:today>=0?"#4ade80":"#f87171",marginTop:2}}>{signed(today)}</div>
+                  <div style={{fontSize:12,color:"#9ca3af"}}>מאז הפתיחה</div>
+                </div>
+              </div>
+              <p style={{fontSize:12,color:"#9ca3af",marginTop:12}}>שילמת בסך הכל {money(cost)}.</p>
+            </> : <div className="sk" style={{height:90,marginTop:8,opacity:.15}}/>}
+          </div>
+        )}
+
+        {slices.length>1 && (
+          <div className="fu">
+            <div className="hd">🥧 איך הכסף מחולק</div>
+            <p className="ex">כמה מהתיק נמצא בכל מניה. פיזור בין כמה מניות מקטין סיכון.</p>
+            <div className="card" style={{padding:16}}>
+              <div style={{display:"flex",height:14,borderRadius:99,overflow:"hidden",gap:2}}>
+                {slices.map(x => <div key={x.sym} style={{flex:x.v,background:x.c}}/>)}
+              </div>
+              <div style={{display:"flex",flexWrap:"wrap",gap:"8px 14px",marginTop:12}}>
+                {slices.map(x => <span key={x.sym} style={{fontSize:12,fontWeight:700,color:"#374151",display:"flex",alignItems:"center",gap:5}}>
+                  <span style={{width:9,height:9,borderRadius:3,background:x.c}}/>{nameOf(x.sym,profiles[x.sym])} {Math.round(x.v/total*100)}%</span>)}
+              </div>
+            </div>
+          </div>
+        )}
+
+        {rows.length>0 && (
+          <div className="fu">
+            <div className="hd">📋 המניות בתיק</div>
+            <div style={{display:"flex",flexDirection:"column",gap:10,marginTop:8}}>
+              {rows.map(r => (
+                <div key={r.id} className="card" style={{padding:"14px 16px"}}>
+                  <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",gap:10}}>
+                    <div className="tap" onClick={()=>onSelect(r.sym)} style={{display:"flex",alignItems:"center",gap:12,minWidth:0}}>
+                      <Logo sym={r.sym} url={profiles[r.sym]?.logo} size={42}/>
+                      <div style={{minWidth:0}}>
+                        <div style={{fontWeight:800,fontSize:15,color:"#111827"}}>{nameOf(r.sym,profiles[r.sym])}</div>
+                        <div style={{fontSize:12,color:"#9ca3af"}}>{r.qty} מניות · קנית ב-{usd(r.cost)}</div>
+                      </div>
+                    </div>
+                    <div style={{textAlign:"left",flexShrink:0}}>
+                      {r.value!=null ? <>
+                        <div style={{fontWeight:900,fontSize:16,color:"#111827"}}>{money(r.value)}</div>
+                        <div style={{fontSize:12,fontWeight:700,color:r.pl>=0?"#16a34a":"#dc2626"}}>{signed(r.pl)} ({r.pl>=0?"+":"−"}{Math.abs(r.pl/r.costTotal*100).toFixed(1)}%)</div>
+                      </> : <><Sk w={70} h={16}/><Sk w={60} h={12} mt={5}/></>}
+                    </div>
+                  </div>
+                  <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginTop:10,paddingTop:10,borderTop:"1px solid #f3f4f6"}}>
+                    <span style={{fontSize:12,color:"#6b7280"}}>מחיר עכשיו: <b>{usd(r.price)}</b></span>
+                    {confirmDel===r.id
+                      ? <span style={{display:"flex",gap:6}}>
+                          <button className="btn2" style={{background:"#fee2e2",color:"#dc2626"}} onClick={()=>{ setHoldings(h=>h.filter(x=>x.id!==r.id)); setConfirmDel(null); }}>כן, הסר</button>
+                          <button className="btn2" onClick={()=>setConfirmDel(null)}>ביטול</button>
+                        </span>
+                      : <button className="btn2" style={{fontSize:12,padding:"6px 12px"}} onClick={()=>setConfirmDel(r.id)}>הסר</button>}
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+
+        {adding
+          ? <AddHolding keyFH={keyFH} onDone={h => { if (h) setHoldings(x => [...x, h]); setAdding(false); }}/>
+          : <button className="btn" onClick={()=>setAdding(true)}>➕ הוסף מניה לתיק</button>}
+
+        <p style={{textAlign:"center",fontSize:11,color:"#c0c8d4"}}>הנתונים נשמרים רק במכשיר הזה · לא המלצת השקעה</p>
+      </div>
+      <BottomNav view="portfolio" go={go} onSettings={onSettings}/>
+    </div>
+  );
+}
+
+function AddHolding({ keyFH, onDone }){
+  const [q, setQ] = useState("");
+  const [results, setResults] = useState([]);
+  const [sym, setSym] = useState(null);
+  const [price, setPrice] = useState(null);
+  const [qty, setQty] = useState("");
+  const [cost, setCost] = useState("");
+  const [err, setErr] = useState("");
+
+  useEffect(() => {
+    const term = q.trim(); if (!term || sym) { setResults([]); return; }
+    const local = Object.entries(HE).filter(([s,v]) => s.includes(term.toUpperCase()) || v.n.includes(term)).map(([s]) => ({symbol:s, description:HE[s].n}));
+    setResults(local);
+    if (/[a-zA-Z]/.test(term)) {
+      const t = setTimeout(() => api.search(term,keyFH).then(r => {
+        const seen = new Set(local.map(x=>x.symbol));
+        setResults([...local, ...r.filter(x=>!seen.has(x.symbol))].slice(0,6));
+      }).catch(()=>{}), 350);
+      return () => clearTimeout(t);
+    }
+  }, [q, sym, keyFH]);
+
+  function choose(s){
+    setSym(s); setQ(s); setResults([]); setErr("");
+    api.quote(s,keyFH).then(r => { if (r?.c) { setPrice(r.c); setCost(c => c || String(r.c)); } }).catch(()=>{});
+  }
+  function save(){
+    const n = parseFloat(qty), c = parseFloat(cost);
+    if (!sym) return setErr("בחר מניה מהרשימה");
+    if (!(n > 0)) return setErr("כמה מניות קנית? הכנס מספר גדול מ-0");
+    if (!(c > 0)) return setErr("באיזה מחיר קנית? הכנס מחיר בדולרים");
+    onDone({ id: Date.now().toString(36), sym, qty:n, cost:c });
+  }
+  const lbl = { fontSize:13, fontWeight:800, color:"#111827", marginBottom:6, display:"block" };
+  const inp = { width:"100%", background:"#f8f9fb", border:"1.5px solid #e8eaed", borderRadius:14, padding:"13px 14px", fontSize:16, fontFamily:"'Heebo',sans-serif", outline:"none" };
+
+  return (
+    <div className="card fu" style={{padding:18,display:"flex",flexDirection:"column",gap:14}}>
+      <div style={{fontWeight:900,fontSize:17,color:"#111827"}}>➕ מניה חדשה בתיק</div>
+      <div style={{position:"relative"}}>
+        <label style={lbl} htmlFor="h-sym">איזו מניה?</label>
+        <input id="h-sym" style={inp} placeholder="למשל: אפל או AAPL" value={q} onChange={e=>{ setQ(e.target.value); setSym(null); setPrice(null); }}/>
+        {results.length>0 && (
+          <div className="sug">
+            {results.map(r => (
+              <div key={r.symbol} className="sr" onClick={()=>choose(r.symbol)}>
+                <div><div style={{fontWeight:800,fontSize:14}}>{r.symbol}</div><div style={{fontSize:12,color:"#9ca3af"}}>{r.description}</div></div>
+                <span style={{color:"#22c55e",fontWeight:700,fontSize:13}}>בחר</span>
+              </div>
+            ))}
+          </div>
+        )}
+        {sym && <div style={{fontSize:12,color:"#16a34a",fontWeight:700,marginTop:6}}>✓ {nameOf(sym)}{price ? ` · מחיר עכשיו ${usd(price)}` : ""}</div>}
+      </div>
+      <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:10}}>
+        <div><label style={lbl} htmlFor="h-qty">כמה מניות?</label>
+          <input id="h-qty" style={inp} type="number" inputMode="decimal" min="0" step="any" placeholder="10" value={qty} onChange={e=>setQty(e.target.value)}/></div>
+        <div><label style={lbl} htmlFor="h-cost">מחיר קנייה ($)</label>
+          <input id="h-cost" style={inp} type="number" inputMode="decimal" min="0" step="any" placeholder="150" value={cost} onChange={e=>setCost(e.target.value)}/></div>
+      </div>
+      {qty>0 && cost>0 && <p className="ex" style={{margin:0}}>סך הכל שילמת: <b>{money(qty*cost)}</b></p>}
+      {err && <p style={{color:"#dc2626",fontSize:13,fontWeight:700,margin:0}}>{err}</p>}
+      <div style={{display:"flex",gap:10}}>
+        <button className="btn" style={{flex:2}} onClick={save}>שמור בתיק</button>
+        <button className="btn2" style={{flex:1}} onClick={()=>onDone(null)}>ביטול</button>
+      </div>
+    </div>
+  );
+}
+
+/* ══════════════════════════════════════
    APP
 ══════════════════════════════════════ */
 function App(){
   const [keys, setKeys] = useState(() => ({ fh: store.get("fhKey") || "", td: store.get("tdKey") || "" }));
   const [sym, setSym] = useState(null);
+  const [view, setView] = useState("home");
   const [settings, setSettings] = useState(false);
+  const go = (v) => { setView(v); setSym(null); window.scrollTo(0,0); };
+  const open = (s) => { setSym(s); window.scrollTo(0,0); };
   const [booting, setBooting] = useState(() => !store.get("fhKey"));
 
   const save = (k) => {
@@ -896,8 +1163,10 @@ function App(){
     <>
       <G/>
       {sym
-        ? <StockPage key={sym} sym={sym} keys={keys} onBack={()=>setSym(null)} onSettings={()=>setSettings(true)}/>
-        : <HomePage keyFH={keys.fh} onSelect={setSym} onSettings={()=>setSettings(true)}/>}
+        ? <StockPage key={sym} sym={sym} keys={keys} view={view} go={go} onBack={()=>setSym(null)} onSettings={()=>setSettings(true)}/>
+        : view==="portfolio"
+          ? <PortfolioPage keyFH={keys.fh} onSelect={open} go={go} onSettings={()=>setSettings(true)}/>
+          : <HomePage keyFH={keys.fh} onSelect={open} go={go} onSettings={()=>setSettings(true)}/>}
       {settings && (
         <div className="sheet" onClick={()=>setSettings(false)}>
           <div onClick={e=>e.stopPropagation()}>
