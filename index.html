@@ -711,6 +711,7 @@ function StockPage({ sym, keys, onBack, onSettings, go, view }){
             const cur = saved.read("cmp", ["AAPL","MSFT"]); const other = cur.find(x => x!==sym) || "MSFT";
             saved.write("cmp", [sym, other===sym ? "AAPL" : other]); go("compare");
           }}>⚖️ השווה למניה אחרת</button>
+          <AlertBox sym={sym} price={quote?.c}/>
         </div>
 
         {/* ── Chart ── */}
@@ -1393,6 +1394,42 @@ function ComparePage({ keyFH, onSelect, onSettings, go }){
         </div>
       </div>
       <BottomNav view="compare" go={go} onSettings={onSettings}/>
+    </div>
+  );
+}
+
+/* ══════════════════════════════════════
+   TELEGRAM PRICE ALERT (works once the bot is set up)
+══════════════════════════════════════ */
+let botInfo;
+const loadBot = () => botInfo || (botInfo = fetch(`data/bot.json?v=${Math.floor(Date.now()/6e5)}`).then(r => r.ok ? r.json() : null).catch(() => null));
+function AlertBox({ sym, price }){
+  const [bot, setBot] = useState(undefined);
+  const [open, setOpen] = useState(false);
+  const [target, setTarget] = useState("");
+  useEffect(() => { loadBot().then(setBot); }, []);
+  if (bot === undefined) return null;
+  if (!bot?.username) return (
+    <p className="ex" style={{marginTop:10,marginBottom:0,textAlign:"center"}}>🔔 התראות מחיר לטלגרם יופעלו אחרי שתחבר את הבוט.</p>
+  );
+  const t = parseFloat(target);
+  const valid = t > 0;
+  const link = valid ? `https://t.me/${bot.username}?start=${sym.replace(/\./g,"-")}_${String(Math.round(t*100)/100).replace(".","p")}` : null;
+  const dir = valid && price ? (t > price ? "תעלה" : "תרד") : null;
+  return !open ? (
+    <button className="btn2" style={{width:"100%",marginTop:8,padding:11}} onClick={()=>{ setOpen(true); if (price) setTarget(String(Math.round(price*1.05))); }}>🔔 התראת מחיר בטלגרם</button>
+  ) : (
+    <div style={{marginTop:10,background:"var(--soft2)",borderRadius:14,padding:14}}>
+      <label htmlFor="alert-price" style={{fontSize:13,fontWeight:800,color:"var(--fg)"}}>תודיע לי כשהמחיר מגיע ל- ($)</label>
+      <input id="alert-price" type="number" inputMode="decimal" step="any" min="0" value={target} onChange={e=>setTarget(e.target.value)}
+        style={{width:"100%",marginTop:8,background:"var(--card)",border:"1.5px solid var(--line)",borderRadius:12,padding:"12px",fontSize:16,color:"var(--fg)",fontFamily:"'Heebo',sans-serif"}}/>
+      {dir && <p className="ex" style={{marginTop:6,marginBottom:0}}>תקבל הודעה כשהמניה {dir} ל-${t.toFixed(2)} (עכשיו {usdRaw(price)}).</p>}
+      <div style={{display:"flex",gap:8,marginTop:10}}>
+        <a className="btn" href={link||undefined} target="_blank" rel="noopener noreferrer"
+          style={{flex:2,textAlign:"center",textDecoration:"none",opacity:valid?1:.4,pointerEvents:valid?"auto":"none"}}>פתח בטלגרם ושלח</a>
+        <button className="btn2" style={{flex:1}} onClick={()=>setOpen(false)}>ביטול</button>
+      </div>
+      <p className="ex" style={{marginTop:8,marginBottom:0}}>בטלגרם לחץ "התחל" (Start). אישור יגיע תוך כ-10 דקות.</p>
     </div>
   );
 }
