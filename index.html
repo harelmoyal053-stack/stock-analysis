@@ -24,7 +24,7 @@
 </script>
 <script type="text/babel" data-presets="react">
 const { useState, useEffect, useRef } = React;
-const { AreaChart, Area, BarChart, Bar, Cell, Tooltip, ResponsiveContainer, YAxis } = Recharts;
+const { AreaChart, Area, BarChart, Bar, Cell, Tooltip, ResponsiveContainer, YAxis, XAxis, ReferenceLine } = Recharts;
 
 /* ══════════════════════════════════════
    STYLES
@@ -134,7 +134,8 @@ const api = {
     const saved = store.get(`p:${s}`); if (saved) return JSON.parse(saved);
     const p = await fh("/stock/profile2",{symbol:s},k); if (p?.name) store.set(`p:${s}`, JSON.stringify(p)); return p;
   }),
-  metric:  (s,k) => cached(`m:${s}`,  216e5, () => fh("/stock/metric",{symbol:s,metric:"all"},k).then(r=>r.metric||{})),
+  metric:  (s,k) => cached(`m:${s}`,  216e5, () => fh("/stock/metric",{symbol:s,metric:"all"},k).then(r=>({ ...(r.metric||{}), _series: r.series||{} }))),
+  earn:    (s,k) => cached(`e:${s}`,  216e5, () => fh("/stock/earnings",{symbol:s},k)),
   rec:     (s,k) => cached(`r:${s}`,  216e5, () => fh("/stock/recommendation",{symbol:s},k)),
   news:    (s,k) => cached(`n:${s}`,  9e5,   () => fh("/company-news",{symbol:s,from:ymd(new Date(Date.now()-7*864e5)),to:ymd(new Date())},k).then(a=>(a||[]).slice(0,5))),
   fin:     (s,k) => cached(`f:${s}`,  864e5, () => fh("/stock/financials-reported",{symbol:s,freq:"annual"},k).then(parseFin)),
@@ -454,7 +455,7 @@ function StockPage({ sym, keys, onBack, onSettings }){
     let alive = true;
     const set = (k) => (v) => alive && setD(x => ({ ...x, [k]: v }));
     const fail = (k) => (e) => { if (!alive) return; setD(x => ({ ...x, [k]: null })); if (e.message==="auth") setErr(e); };
-    ["profile","metric","rec","news","fin"].forEach(k => api[k](sym,keys.fh).then(set(k)).catch(fail(k)));
+    ["profile","metric","rec","news","fin","earn"].forEach(k => api[k](sym,keys.fh).then(set(k)).catch(fail(k)));
     const tick = () => api.quote(sym,keys.fh).then(v => { set("quote")(v); alive && setErr(null); }).catch(e => alive && setErr(e));
     tick(); const id = setInterval(tick, 10000);
     return () => { alive = false; clearInterval(id); };
@@ -467,7 +468,7 @@ function StockPage({ sym, keys, onBack, onSettings }){
     return () => { alive = false; };
   }, [sym, range, keys.td]);
 
-  const { quote, profile, metric, rec, news, fin } = d;
+  const { quote, profile, metric, rec, news, fin, earn } = d;
   const up = (quote?.dp ?? 0) >= 0;
   const summary = buildSummary({ fin, rec, metric, quote });
   const r = rec?.[0];
@@ -615,6 +616,11 @@ function StockPage({ sym, keys, onBack, onSettings }){
           </div>
         )}
 
+        {/* ── More charts ── */}
+        <EarningsCard earn={earn}/>
+        <MarginCard metric={metric}/>
+        <AnalystTrendCard rec={rec}/>
+
         {/* ── News ── */}
         {news !== null && (
           <div className="fu">
@@ -636,6 +642,135 @@ function StockPage({ sym, keys, onBack, onSettings }){
         <p style={{textAlign:"center",fontSize:11,color:"#c0c8d4"}}>מקור: Finnhub{keys.td ? " · Twelve Data" : ""} · לא המלצת השקעה</p>
       </div>
       <BottomNav onHome={onBack} onSettings={onSettings}/>
+    </div>
+  );
+}
+
+/* ══════════════════════════════════════
+   EXTRA CHARTS — all from the free Finnhub key
+══════════════════════════════════════ */
+const axisTick = { fill:"#9ca3af", fontSize:11 };
+const ChartTip = ({ active, payload, fmt }) => !active || !payload?.length ? null : (
+  <div style={{background:"#111827",borderRadius:10,padding:"7px 12px",color:"#fff",fontSize:12,fontWeight:600,direction:"rtl"}}>
+    <div style={{color:"#9ca3af",marginBottom:2}}>{payload[0].payload.label}</div>
+    {payload.map(p => <div key={p.dataKey}><span style={{color:p.color||p.fill}}>●</span> {p.name}: {fmt ? fmt(p.value) : p.value}</div>)}
+  </div>
+);
+const Legend2 = ({ items }) => (
+  <div style={{display:"flex",gap:14,justifyContent:"center",marginTop:8,flexWrap:"wrap"}}>
+    {items.map(([c,l]) => <span key={l} style={{fontSize:12,color:"#6b7280",fontWeight:600,display:"flex",alignItems:"center",gap:5}}>
+      <span style={{width:10,height:10,borderRadius:3,background:c,display:"inline-block"}}/>{l}</span>)}
+  </div>
+);
+const qLabel = (period) => { const d = new Date(period); return `Q${Math.floor(d.getUTCMonth()/3)+1} ${String(d.getUTCFullYear()).slice(2)}`; };
+
+/* Earnings: actual vs expected, last 4 quarters */
+function EarningsCard({ earn }){
+  if (earn === null) return null;
+  const rows = (earn||[]).filter(e => e.actual!=null && e.estimate!=null).slice(0,4).reverse()
+    .map(e => ({ label:qLabel(e.period), est:e.estimate, act:e.actual, beat:e.actual>=e.estimate }));
+  if (earn && !rows.length) return null;
+  const beats = rows.filter(r=>r.beat).length;
+  return (
+    <div className="fu">
+      <div className="hd">🎯 האם החברה עמדה בציפיות?</div>
+      <p className="ex">רווח למניה בכל רבעון: מה האנליסטים ציפו מול מה שהחברה הרוויחה בפועל.</p>
+      <div className="card" style={{padding:"18px 12px 14px"}}>
+        {!earn ? <Sk h={160}/> : <>
+          <div style={{fontSize:15,fontWeight:800,color:beats>=3?"#16a34a":beats<=1?"#dc2626":"#ca8a04",textAlign:"center",marginBottom:10}}>
+            {beats===rows.length ? `עברה את הציפיות בכל ${rows.length} הרבעונים האחרונים` : `עברה את הציפיות ב-${beats} מתוך ${rows.length} רבעונים`}
+          </div>
+          <ResponsiveContainer width="100%" height={160}>
+            <BarChart data={rows} margin={{top:6,right:4,bottom:0,left:4}} barGap={3}>
+              <XAxis dataKey="label" tick={axisTick} axisLine={false} tickLine={false}/>
+              <YAxis hide/>
+              <Tooltip cursor={{fill:"rgba(0,0,0,.04)"}} content={<ChartTip fmt={v=>`$${v.toFixed(2)}`}/>}/>
+              <Bar dataKey="est" name="צפי" fill="#d1d5db" radius={[4,4,0,0]} isAnimationActive={false}/>
+              <Bar dataKey="act" name="בפועל" radius={[4,4,0,0]} isAnimationActive={false}>
+                {rows.map((r,i) => <Cell key={i} fill={r.beat?"#22c55e":"#ef4444"}/>)}
+              </Bar>
+            </BarChart>
+          </ResponsiveContainer>
+          <Legend2 items={[["#d1d5db","צפי האנליסטים"],["#22c55e","בפועל (עברה)"],["#ef4444","בפועל (פספסה)"]]}/>
+        </>}
+      </div>
+    </div>
+  );
+}
+
+/* Net profit margin over the years */
+function MarginCard({ metric }){
+  if (metric === null) return null;
+  const raw = metric?._series?.annual?.netMargin || [];
+  const rows = raw.slice(0,6).reverse().map(x => ({ label:String(new Date(x.period).getUTCFullYear()), v:+(x.v*100).toFixed(1) }));
+  if (metric && rows.length < 2) return null;
+  const last = rows[rows.length-1], first = rows[0];
+  const col = (last?.v ?? 0) >= 0 ? "#22c55e" : "#ef4444";
+  return (
+    <div className="fu">
+      <div className="hd">🧮 כמה מכל דולר נשאר רווח?</div>
+      <p className="ex">שולי רווח: מכל 100 דולר שנכנסים לחברה, כמה נשארים אחרי כל ההוצאות.</p>
+      <div className="card" style={{padding:"18px 12px 14px"}}>
+        {!metric ? <Sk h={150}/> : <>
+          <div style={{textAlign:"center",marginBottom:6}}>
+            <span style={{fontSize:26,fontWeight:900,color:"#111827"}}>${last.v.toFixed(0)}</span>
+            <span style={{fontSize:13,color:"#6b7280",fontWeight:600}}> רווח מכל $100 (שנת {last.label})</span>
+          </div>
+          <p style={{fontSize:12,textAlign:"center",fontWeight:700,marginBottom:6,color:last.v>=first.v?"#16a34a":"#dc2626"}}>
+            {last.v>=first.v ? `החברה נהייתה רווחית יותר מאז ${first.label}` : `החברה נהייתה פחות רווחית מאז ${first.label}`}
+          </p>
+          <ResponsiveContainer width="100%" height={140}>
+            <AreaChart data={rows} margin={{top:8,right:8,bottom:0,left:8}}>
+              <defs><linearGradient id="mg" x1="0" y1="0" x2="0" y2="1">
+                <stop offset="0%" stopColor={col} stopOpacity={.25}/><stop offset="100%" stopColor={col} stopOpacity={0}/>
+              </linearGradient></defs>
+              <XAxis dataKey="label" tick={axisTick} axisLine={false} tickLine={false}/>
+              <YAxis hide domain={[d=>Math.min(0,d), "dataMax"]}/>
+              <ReferenceLine y={0} stroke="#e5e7eb"/>
+              <Tooltip content={<ChartTip fmt={v=>`${v}%`}/>}/>
+              <Area type="monotone" dataKey="v" name="שולי רווח" stroke={col} strokeWidth={2.5} fill="url(#mg)"
+                dot={{r:3,fill:col,strokeWidth:0}} isAnimationActive={false}/>
+            </AreaChart>
+          </ResponsiveContainer>
+        </>}
+      </div>
+    </div>
+  );
+}
+
+/* Analyst opinions month by month */
+function AnalystTrendCard({ rec }){
+  if (rec === null) return null;
+  const rows = (rec||[]).slice(0,6).reverse().map(r => {
+    const d = new Date(r.period);
+    return { label:`${d.getUTCMonth()+1}/${String(d.getUTCFullYear()).slice(2)}`, buy:r.buy+r.strongBuy, hold:r.hold, sell:r.sell+r.strongSell };
+  });
+  if (rec && rows.length < 2) return null;
+  const pct = r => { const t = r.buy+r.hold+r.sell; return t ? Math.round(r.buy/t*100) : 0; };
+  const a = rows[0] && pct(rows[0]), b = rows.length && pct(rows[rows.length-1]);
+  const trend = b - a;
+  return (
+    <div className="fu">
+      <div className="hd">📅 איך דעת האנליסטים השתנתה?</div>
+      <p className="ex">כמה אנליסטים המליצו לקנות, להחזיק או למכור בכל חודש.</p>
+      <div className="card" style={{padding:"18px 12px 14px"}}>
+        {!rec ? <Sk h={160}/> : <>
+          <p style={{fontSize:14,textAlign:"center",fontWeight:800,marginBottom:8,color:trend>3?"#16a34a":trend<-3?"#dc2626":"#6b7280"}}>
+            {trend>3 ? `יותר אנליסטים ממליצים לקנות (${a}% ← ${b}%)` : trend<-3 ? `פחות אנליסטים ממליצים לקנות (${a}% ← ${b}%)` : `הדעות כמעט לא השתנו (${b}% ממליצים לקנות)`}
+          </p>
+          <ResponsiveContainer width="100%" height={160}>
+            <BarChart data={rows} margin={{top:4,right:4,bottom:0,left:4}}>
+              <XAxis dataKey="label" tick={axisTick} axisLine={false} tickLine={false}/>
+              <YAxis hide/>
+              <Tooltip cursor={{fill:"rgba(0,0,0,.04)"}} content={<ChartTip/>}/>
+              <Bar dataKey="sell" name="מכירה" stackId="a" fill="#ef4444" isAnimationActive={false}/>
+              <Bar dataKey="hold" name="החזקה" stackId="a" fill="#f59e0b" isAnimationActive={false}/>
+              <Bar dataKey="buy"  name="קנייה" stackId="a" fill="#22c55e" radius={[4,4,0,0]} isAnimationActive={false}/>
+            </BarChart>
+          </ResponsiveContainer>
+          <Legend2 items={[["#22c55e","קנייה"],["#f59e0b","החזקה"],["#ef4444","מכירה"]]}/>
+        </>}
+      </div>
     </div>
   );
 }
