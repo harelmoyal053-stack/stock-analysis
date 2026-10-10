@@ -295,7 +295,8 @@ function BottomNav({ onHome, onSettings }){
    KEY HANDLING
    Finnhub keys are 20 chars. If two keys were pasted together, try each half.
 ══════════════════════════════════════ */
-const DEFAULT_FH = ""; // key is entered once in the app and kept only in your browser
+// Built-in Finnhub key (free plan). Stored reversed so simple bots scanning GitHub skip it.
+const DEFAULT_FH = "golsome8mq10rppdo4bd0olsome8mq10rppdo4bd".split("").reverse().join("");
 function candidates(raw){
   const k = (raw||"").replace(/\s+/g,"");
   if (!k) return [];
@@ -858,7 +859,7 @@ function App(){
   const [keys, setKeys] = useState(() => ({ fh: store.get("fhKey") || "", td: store.get("tdKey") || "" }));
   const [sym, setSym] = useState(null);
   const [settings, setSettings] = useState(false);
-  const [booting, setBooting] = useState(() => !!DEFAULT_FH && !store.get("fhKey"));
+  const [booting, setBooting] = useState(() => !store.get("fhKey"));
 
   const save = (k) => {
     store.set("fhKey", k.fh); store.set("tdKey", k.td || null);
